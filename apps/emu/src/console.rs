@@ -15,6 +15,8 @@ pub struct ConsoleInfo {
     pub display: Option<Arc<emu_vmm::virtio::gpu::FrameStore>>,
     pub inputs: Arc<std::sync::Mutex<Option<emu_vmm::Inputs>>>,
     pub sensors: Arc<emu_vmm::pipe::sensors::Sensors>,
+    pub clipboard: Arc<emu_vmm::pipe::clipboard::Clipboard>,
+    pub fingerprint: Arc<emu_vmm::pipe::fingerprint::Fingerprint>,
 }
 
 /// `sensor set <name> <v[:v...]>` / `sensor get <name>` (stock syntax).
@@ -196,6 +198,26 @@ fn session(stream: TcpStream, info: &ConsoleInfo) -> std::io::Result<()> {
             ("screenshot", true) => screenshot(info, words.get(1).copied()),
             ("event", true) => event(info, &words[1..]),
             ("sensor", true) => sensor(info, &words[1..]),
+            ("finger", true) => match (words.get(1).copied(), words.get(2).and_then(|v| v.parse::<u32>().ok())) {
+                (Some("touch"), Some(id)) if id > 0 => {
+                    info.fingerprint.touch(id);
+                    "OK".into()
+                }
+                (Some("remove"), _) => {
+                    info.fingerprint.remove();
+                    "OK".into()
+                }
+                _ => "KO: usage: finger touch <fingerid> | finger remove".into(),
+            },
+            // emu-rs extension: `clipboard get` / `clipboard set <text>`.
+            ("clipboard", true) => match words.get(1).copied() {
+                Some("get") => format!("{}\r\nOK", String::from_utf8_lossy(&info.clipboard.get())),
+                Some("set") => {
+                    info.clipboard.set(words[2..].join(" ").as_bytes());
+                    "OK".into()
+                }
+                _ => "KO: usage: clipboard get|set <text>".into(),
+            },
             ("touch", true) => {
                 // emu-rs extension: `touch <x> <y> [down|up|tap]` in device pixels.
                 let g = info.inputs.lock().unwrap_or_else(|e| e.into_inner());

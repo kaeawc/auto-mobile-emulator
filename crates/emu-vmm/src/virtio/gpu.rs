@@ -367,8 +367,34 @@ impl Worker {
             };
             let len = chain.write_all(&self.mem, &resp).unwrap_or(0);
             if trace() {
+                // For resource commands, the resource id (and for creates, target/format/bind).
+                let detail = match hdr.typ {
+                    cmd::RESOURCE_CREATE_3D => format!(
+                        " res {} target {} fmt {} bind {:#x} {}x{}",
+                        le32(&req, 24),
+                        le32(&req, 28),
+                        le32(&req, 32),
+                        le32(&req, 36),
+                        le32(&req, 40),
+                        le32(&req, 44)
+                    ),
+                    cmd::RESOURCE_CREATE_BLOB => format!(
+                        " res {} mem {} flags {:#x} id {} size {}",
+                        le32(&req, 24),
+                        le32(&req, 28),
+                        le32(&req, 32),
+                        le64(&req, 40),
+                        le64(&req, 48)
+                    ),
+                    cmd::RESOURCE_UNREF | cmd::CTX_ATTACH_RESOURCE | cmd::CTX_DETACH_RESOURCE | cmd::RESOURCE_ATTACH_BACKING => {
+                        format!(" res {}", le32(&req, 24))
+                    }
+                    cmd::TRANSFER_TO_HOST_3D | cmd::TRANSFER_FROM_HOST_3D => format!(" res {}", le32(&req, 56)),
+                    cmd::RESOURCE_MAP_BLOB | cmd::RESOURCE_UNMAP_BLOB => format!(" res {}", le32(&req, 24)),
+                    _ => String::new(),
+                };
                 eprintln!(
-                    "gpu: cmd {:#06x} ctx {} flags {:#x} fence {} ring {} -> {:#06x}",
+                    "gpu: cmd {:#06x} ctx {} flags {:#x} fence {} ring {}{detail} -> {:#06x}",
                     hdr.typ,
                     hdr.ctx_id,
                     hdr.flags,

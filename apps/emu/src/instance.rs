@@ -32,6 +32,9 @@ pub struct Instance {
     pub inputs: std::sync::Arc<std::sync::Mutex<Option<emu_vmm::Inputs>>>,
     /// Sensor values, shared by the guest's sensors HAL and the console.
     pub sensors: std::sync::Arc<emu_vmm::pipe::sensors::Sensors>,
+    /// Guest clipboard, shared with the console.
+    pub clipboard: std::sync::Arc<emu_vmm::pipe::clipboard::Clipboard>,
+    pub fingerprint: std::sync::Arc<emu_vmm::pipe::fingerprint::Fingerprint>,
     _lock: Option<File>,
 }
 
@@ -123,6 +126,8 @@ impl Instance {
             gpu_lib64,
             inputs: Default::default(),
             sensors: Default::default(),
+            clipboard: Default::default(),
+            fingerprint: Default::default(),
             _lock: lock,
         })
     }
@@ -223,6 +228,8 @@ impl Instance {
             boot_props: self.boot_props(),
             input: Some((self.avd.lcd().0, self.avd.lcd().1)),
             sensors: self.sensors.clone(),
+            clipboard: self.clipboard.clone(),
+            fingerprint: self.fingerprint.clone(),
             on_guest_event: {
                 let started = std::time::Instant::now();
                 Some(std::sync::Arc::new(move |event: &str| {

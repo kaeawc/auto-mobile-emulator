@@ -76,9 +76,19 @@ fn renderer(spec: &GpuSpec) -> Result<Arc<emu_gfxstream::Renderer>> {
     if std::env::var_os("EMU_GL_COMPOSITION").is_none() {
         flags |= emu_gfxstream::flags::VULKAN_NATIVE_SWAPCHAIN;
     }
-    // EMU_RENDERER_FEATURES overrides renderer features, e.g. "HostComposition:disabled".
-    let features = std::env::var("EMU_RENDERER_FEATURES").ok();
-    r.init_with_features(spec.width, spec.height, flags, features.as_deref(), spec.verbose, virtio::gpu::fence_handler())
+    // What the ranchu gralloc expects of the host:
+    // - color buffer lifetimes follow its `refcount` pipes (RefCountPipe); otherwise the
+    //   allocator's own release frees buffers SurfaceFlinger and apps are still using;
+    // - CPU reads of color buffers (screencap, software readers) by DMA into shared-slot host
+    //   memory (`ANDROID_EMU_read_color_buffer_dma` = GlDirectMem + shared slots), resolved
+    //   through the DMA translator `run` installs.
+    // EMU_RENDERER_FEATURES adds overrides, e.g. "HostComposition:disabled".
+    let mut features = String::from("RefCountPipe:enabled,GlDirectMem:enabled,HasSharedSlotsHostMemoryAllocator:enabled");
+    if let Ok(extra) = std::env::var("EMU_RENDERER_FEATURES") {
+        features.push(',');
+        features.push_str(&extra);
+    }
+    r.init_with_features(spec.width, spec.height, flags, Some(&features), spec.verbose, virtio::gpu::fence_handler())
         .context("initializing the gfxstream renderer")?;
     // Host composition posts frames to the renderer's display; read them back for emu-rs's
     // display sink (screenshots, desktop, streaming).
@@ -125,6 +135,10 @@ pub struct MachineConfig {
     pub on_guest_event: Option<pipe::misc::GuestEvent>,
     /// Live sensor values (served over `qemud:sensors`, changed by the console).
     pub sensors: Arc<pipe::sensors::Sensors>,
+    /// Shared clipboard (served over the `clipboard` pipe).
+    pub clipboard: Arc<pipe::clipboard::Clipboard>,
+    /// Fingerprint sensor events (console `finger touch|remove`).
+    pub fingerprint: Arc<pipe::fingerprint::Fingerprint>,
     /// Touchscreen size; enables the virtio-input touchscreen, keyboard and rotary devices.
     pub input: Option<(u32, u32)>,
     /// Receives the input handles of this run (they change when the guest reboots).
@@ -248,11 +262,27 @@ pub fn run(cfg: MachineConfig, stop: Arc<AtomicBool>) -> Result<Outcome> {
     if cfg.rng {
         slots[slots::RNG as usize] = Some(Box::new(virtio::rng::Rng::new()));
     }
+    let mut dma_renderer = None;
+    let mut gpu_renderer = None;
     if let Some(spec) = &cfg.gpu {
+        let r = renderer(spec)?;
+        gpu_renderer = Some(r.clone());
+        // Guest-physical → host for the renderer's DMA paths (gralloc CPU reads land in the
+        // goldfish address-space area; direct-mapped buffers may be anywhere in RAM).
+        let (ram, area) = (mem.clone(), as_area.clone());
+        let translate: emu_gfxstream::DmaTranslator = Box::new(move |gpa| {
+            ram.host_range(gpa, 1)
+                .or_else(|| area.as_ref().and_then(|a| a.host_range(gpa, 1)))
+                .map_or(std::ptr::null_mut(), |h| h.as_ptr())
+        });
+        match r.set_dma_translator(Some(translate)) {
+            Ok(()) => dma_renderer = Some(r.clone()),
+            Err(e) => eprintln!("emu: renderer DMA hooks unavailable ({e}); guest CPU reads of color buffers will fail"),
+        }
         let gpu = virtio::gpu::Gpu::new(virtio::gpu::GpuConfig {
             width: spec.width,
             height: spec.height,
-            renderer: renderer(spec)?,
+            renderer: r,
             shm: (GPU_SHM_BASE, GPU_SHM_SIZE),
             display: spec.display.clone(),
         });
@@ -276,9 +306,17 @@ pub fn run(cfg: MachineConfig, stop: Arc<AtomicBool>) -> Result<Outcome> {
         let mut registry = pipe::PipeRegistry::default();
         registry.register("qemud:adb", Box::new(svc));
         registry.register("qemud:boot-properties", Box::new(pipe::qemud::BootProperties { props: cfg.boot_props.clone() }));
-        registry.register("refcount", Box::new(devices::goldfish_pipe::RefCount));
+        let on_last_ref = gpu_renderer.clone().map(|r| -> devices::goldfish_pipe::OnLastRef {
+            Arc::new(move |handle| {
+                let _ = r.release_color_buffer(handle);
+            })
+        });
+        registry.register("refcount", Box::new(devices::goldfish_pipe::RefCount { on_last_ref }));
         registry.register("QemuMiscPipe", Box::new(pipe::misc::MiscService { on_event: cfg.on_guest_event.clone() }));
         registry.register("qemud:sensors", Box::new(pipe::sensors::SensorService { sensors: cfg.sensors.clone() }));
+        registry.register("clipboard", Box::new(pipe::clipboard::ClipboardService { clipboard: cfg.clipboard.clone() }));
+        registry.register("qemud:fingerprintlisten", Box::new(pipe::fingerprint::FingerprintService { fingerprint: cfg.fingerprint.clone() }));
+        registry.register("qemud:camera", Box::new(pipe::fingerprint::CameraService));
         registry.register("GLProcessPipe", Box::new(devices::goldfish_pipe::GlProcess::default()));
         let registry = Arc::new(registry);
         // Graphics pipes never use vsock; they need the goldfish pipe device.
@@ -319,6 +357,9 @@ pub fn run(cfg: MachineConfig, stop: Arc<AtomicBool>) -> Result<Outcome> {
     let exits = cpus.stats.iter().map(|s| s.snapshot().to_vec()).collect();
     // Devices (and their worker threads) go first, then the VM, then guest RAM.
     drop(cpus);
+    if let Some(r) = dma_renderer {
+        let _ = r.set_dma_translator(None);
+    }
     drop(vm);
     drop(as_area);
     drop(mem);

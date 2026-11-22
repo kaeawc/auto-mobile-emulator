@@ -45,6 +45,7 @@ mod ctx {
 mod hma {
     pub const ALLOCATE: u64 = 1;
     pub const UNALLOCATE: u64 = 2;
+    pub const CHECK_SHARED_SLOTS: u64 = 3;
 }
 
 #[derive(Default)]
@@ -171,7 +172,31 @@ impl GoldfishAddressSpace {
                 *kind = Some(metadata);
                 0
             }
-            Some(ctx::HOST_MEMORY_ALLOCATOR | ctx::SHARED_SLOTS_HOST_MEMORY_ALLOCATOR) => {
+            // Shared slots: the host picks the place. Allocate returns the block's offset in
+            // the area (phys_addr) and its page-rounded size; the guest maps it from there.
+            Some(ctx::SHARED_SLOTS_HOST_MEMORY_ALLOCATOR) => match metadata {
+                hma::ALLOCATE => {
+                    let size = self.mem.read_u64(addr + 8).unwrap_or(0);
+                    match Self::allocate(s, size) {
+                        Some((off, size)) => {
+                            let _ = self.area.zero(self.area.base() + off, size as usize);
+                            let _ = self.mem.write(addr, &off.to_le_bytes());
+                            let _ = self.mem.write(addr + 8, &size.to_le_bytes());
+                            0
+                        }
+                        None => u64::MAX,
+                    }
+                }
+                hma::UNALLOCATE => {
+                    // Offsets are area-relative; accept an absolute address too.
+                    let at = self.mem.read_u64(addr).unwrap_or(u64::MAX);
+                    let off = if at >= self.area.base() { at - self.area.base() } else { at };
+                    if Self::deallocate(s, off) { 0 } else { u64::MAX }
+                }
+                hma::CHECK_SHARED_SLOTS => 0,
+                _ => u64::MAX,
+            },
+            Some(ctx::HOST_MEMORY_ALLOCATOR) => {
                 let phys = self.mem.read_u64(addr).unwrap_or(0);
                 let size = self.mem.read_u64(addr + 8).unwrap_or(0);
                 let inside = phys >= self.area.base() && phys.saturating_add(size) <= self.area.end();
@@ -279,5 +304,33 @@ mod tests {
         wr(&d, REG_PING, h);
         assert_eq!(mem.read_u64(ping + 16).expect("r"), 0);
         assert_eq!(area.read_u32(AREA + 8192).expect("r"), 0, "fresh memory is zeroed");
+    }
+
+    #[test]
+    fn shared_slots_allocator_picks_offsets() {
+        let mem = Arc::new(GuestRam::new(RAM, 0x10_0000).expect("ram"));
+        let area = Arc::new(GuestRam::new(AREA, 0x10_0000).expect("area"));
+        let d = GoldfishAddressSpace::new(mem.clone(), area.clone());
+        wr(&d, REG_COMMAND, CMD_GEN_HANDLE);
+        let h = rd(&d, REG_HANDLE);
+        let ping = RAM + 0x2000;
+        wr(&d, REG_PING_INFO_ADDR_LOW, ping as u32);
+        wr(&d, REG_COMMAND, CMD_TELL_PING_INFO_ADDR);
+        let call = |metadata: u64, phys: u64, size: u64| {
+            mem.write(ping, &phys.to_le_bytes()).expect("w");
+            mem.write(ping + 8, &size.to_le_bytes()).expect("w");
+            mem.write(ping + 16, &metadata.to_le_bytes()).expect("w");
+            wr(&d, REG_PING, h);
+            (mem.read_u64(ping).expect("r"), mem.read_u64(ping + 8).expect("r"), mem.read_u64(ping + 16).expect("r"))
+        };
+        assert_eq!(call(ctx::SHARED_SLOTS_HOST_MEMORY_ALLOCATOR, 0, 0).2, 0);
+        assert_eq!(call(hma::CHECK_SHARED_SLOTS, 0, 0).2, 0);
+        area.write(AREA, &[0xaa; 8]).expect("w");
+        assert_eq!(call(hma::ALLOCATE, 0, 100), (0, 4096, 0), "offset 0, one page");
+        assert_eq!(area.read_u32(AREA).expect("r"), 0, "zeroed");
+        assert_eq!(call(hma::ALLOCATE, 0, 5000), (4096, 8192, 0));
+        assert_eq!(call(hma::UNALLOCATE, 0, 0).2, 0);
+        assert_eq!(call(hma::UNALLOCATE, AREA + 4096, 0).2, 0, "absolute address");
+        assert_eq!(call(hma::UNALLOCATE, 0, 0).2, u64::MAX, "double free");
     }
 }

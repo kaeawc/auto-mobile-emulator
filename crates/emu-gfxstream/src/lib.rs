@@ -548,6 +548,10 @@ pub fn configure_environment(emulator_dir: &Path, icd: Icd) {
     vars.push(("ANDROID_EMU_VK_ICD", icd.name().into()));
     // Host GLES through ANGLE (Metal) instead of the deprecated desktop GL, which lacks GLSL ES 3.
     vars.push(("ANDROID_EGL_ON_EGL", "1".into()));
+    // ANGLE's default display on macOS is its CGL backend, whose context setup for a
+    // ColorBuffer's display surface hangs inside libGL (blocking that render thread and with it
+    // the guest's pipe reads). Metal is what the backend is meant to run on here.
+    vars.push(("ANGLE_DEFAULT_PLATFORM", "metal".into()));
     if icd == Icd::MoltenVk {
         // What gfxstream configures for MoltenVK: its compositor shaders fail to convert with
         // Metal argument buffers on.
@@ -647,6 +651,65 @@ impl Renderer {
             for display in 0..4 {
                 set_cb(fb, Some(on_post as PostFn), std::ptr::null_mut(), display, true);
             }
+        }
+        Ok(())
+    }
+}
+
+type OnLastColorBufferRef = unsafe extern "C" fn(*mut c_void, u32);
+
+impl Renderer {
+    /// Frees color buffer `handle` once its last guest reference is gone (the guest's
+    /// `refcount` pipe closed). Needs the RefCountPipe feature, under which consumers' explicit
+    /// closes no longer free buffers.
+    pub fn release_color_buffer(&self, handle: u32) -> Result<()> {
+        let h = self.handle;
+        let get_fb: GetFb = sym!(h, "_ZN9gfxstream4host11FrameBuffer5getFBEv");
+        let on_last: OnLastColorBufferRef = sym!(h, "_ZN9gfxstream4host11FrameBuffer20onLastColorBufferRefEj");
+        // SAFETY: getFB returns the singleton or null; onLastColorBufferRef is a member function
+        // taking `this` first (Itanium ABI) and tolerates unknown handles.
+        unsafe {
+            let fb = get_fb();
+            if fb.is_null() {
+                return Err(Error::Call("FrameBuffer::getFB", 0));
+            }
+            on_last(fb, handle);
+        }
+        Ok(())
+    }
+}
+
+/// Resolves a guest-physical address to the host address backing it (null if unmapped).
+pub type DmaTranslator = Box<dyn Fn(u64) -> *mut u8 + Send + Sync>;
+static DMA: std::sync::RwLock<Option<DmaTranslator>> = std::sync::RwLock::new(None);
+
+extern "C" fn dma_get_host_addr(gpa: u64) -> *mut c_void {
+    match DMA.read() {
+        Ok(g) => g.as_ref().map_or(std::ptr::null_mut(), |f| f(gpa).cast()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+extern "C" fn dma_unlock(_gpa: u64) {}
+
+type SetDmaGetHostAddr = unsafe extern "C" fn(Option<extern "C" fn(u64) -> *mut c_void>);
+type SetDmaUnlock = unsafe extern "C" fn(Option<extern "C" fn(u64)>);
+
+impl Renderer {
+    /// Installs how the renderer turns guest-physical addresses into host pointers. The guest's
+    /// gralloc reads color buffers into goldfish address-space memory by physical address
+    /// (`rcReadColorBufferDMA`), and direct-mapped GL buffers work the same way; the stock
+    /// emulator registers these through the renderer's exported DMA hooks. Pass `None` before
+    /// the memory the translator points into goes away.
+    pub fn set_dma_translator(&self, translate: Option<DmaTranslator>) -> Result<()> {
+        *DMA.write().unwrap_or_else(|e| e.into_inner()) = translate;
+        let h = self.handle;
+        let set_addr: SetDmaGetHostAddr = sym!(h, "_ZN9gfxstream4host31set_gfxstream_dma_get_host_addrEPFPvyE");
+        let set_unlock: SetDmaUnlock = sym!(h, "_ZN9gfxstream4host24set_gfxstream_dma_unlockEPFvyE");
+        // SAFETY: both setters store a plain function pointer; ours stay valid for the process.
+        unsafe {
+            set_addr(Some(dma_get_host_addr));
+            set_unlock(Some(dma_unlock));
         }
         Ok(())
     }

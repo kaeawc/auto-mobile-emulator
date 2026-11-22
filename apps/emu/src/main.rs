@@ -171,6 +171,8 @@ fn real_main() -> Result<ExitCode> {
             display: inst.display.clone(),
             inputs: inst.inputs.clone(),
             sensors: inst.sensors.clone(),
+            clipboard: inst.clipboard.clone(),
+            fingerprint: inst.fingerprint.clone(),
         },
     )?;
     let _advert = console::Advertisement::write(&avd.name, &avd.dir, inst.console_port);

@@ -340,25 +340,46 @@ impl MmioDevice for GoldfishPipe {
     }
 }
 
-/// `refcount`: the guest allocator holds one per color buffer so the host can free it when the
-/// guest process dies. gfxstream runs with RefCountPipe off (lifetimes follow explicit closes),
-/// so the handles are accepted and dropped.
-pub struct RefCount;
+/// Called with a color buffer handle when its last guest reference goes away.
+pub type OnLastRef = Arc<dyn Fn(u32) + Send + Sync>;
+
+/// `refcount`: the guest allocator opens one per color buffer and writes the 4-byte host handle;
+/// the buffer lives until every guest fd sharing that pipe is closed (buffers cross processes as
+/// fds). With the renderer's RefCountPipe feature on, this is the only thing that frees color
+/// buffers — explicit closes from consumers don't.
+#[derive(Default)]
+pub struct RefCount {
+    pub on_last_ref: Option<OnLastRef>,
+}
 
 impl crate::pipe::PipeService for RefCount {
     fn open(&self, name: &str, _ctx: PipeCtx) -> Option<Box<dyn PipeHandler>> {
-        (name == "refcount").then(|| Box::new(Sink) as _)
+        (name == "refcount").then(|| Box::new(RefPipe { buf: Vec::new(), handle: 0, on_last_ref: self.on_last_ref.clone() }) as _)
     }
 }
 
-struct Sink;
+struct RefPipe {
+    buf: Vec<u8>,
+    handle: u32,
+    on_last_ref: Option<OnLastRef>,
+}
 
-impl PipeHandler for Sink {
-    fn guest_data(&mut self, _data: &[u8], _to_guest: &mut Vec<u8>) -> bool {
+impl PipeHandler for RefPipe {
+    fn guest_data(&mut self, data: &[u8], _to_guest: &mut Vec<u8>) -> bool {
+        self.buf.extend_from_slice(data);
+        while self.buf.len() >= 4 {
+            let h: Vec<u8> = self.buf.drain(..4).collect();
+            self.handle = u32::from_le_bytes([h[0], h[1], h[2], h[3]]);
+        }
         true
     }
     fn host_msg(&mut self, msg: HostMsg, _to_guest: &mut Vec<u8>) -> bool {
         !matches!(msg, HostMsg::Close)
+    }
+    fn closed(&mut self) {
+        if let (h @ 1.., Some(cb)) = (std::mem::take(&mut self.handle), &self.on_last_ref) {
+            cb(h);
+        }
     }
 }
 
@@ -437,7 +458,7 @@ mod tests {
         let line = Arc::new(TestLine::default());
         let mut reg = PipeRegistry::default();
         reg.register("GLProcessPipe", Box::new(GlProcess::default()));
-        reg.register("refcount", Box::new(RefCount));
+        reg.register("refcount", Box::new(RefCount::default()));
         let d = GoldfishPipe::new(mem.clone(), Arc::new(reg), line.clone());
         assert_eq!(
             {

@@ -9,6 +9,7 @@ pub mod devices;
 pub mod disk;
 pub mod irq;
 pub mod layout;
+pub mod modem;
 pub mod pipe;
 pub mod vcpu;
 pub mod virtio;

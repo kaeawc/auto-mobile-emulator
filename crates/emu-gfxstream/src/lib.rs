@@ -291,12 +291,26 @@ impl Renderer {
     /// Initializes the renderer for a `width`×`height` primary display. `on_fence` runs on a
     /// renderer thread whenever a fence created with [`Renderer::create_fence`] signals.
     pub fn init(&self, width: u32, height: u32, renderer_flags: u64, verbose: bool, on_fence: FenceHandler) -> Result<()> {
+        self.init_with_features(width, height, renderer_flags, None, verbose, on_fence)
+    }
+
+    /// Like [`Renderer::init`], with feature overrides: `"Name:enabled,Other:disabled"`.
+    pub fn init_with_features(
+        &self,
+        width: u32,
+        height: u32,
+        renderer_flags: u64,
+        features: Option<&str>,
+        verbose: bool,
+        on_fence: FenceHandler,
+    ) -> Result<()> {
         if INITIALIZED.swap(true, Ordering::SeqCst) {
             return Err(Error::AlreadyInitialized);
         }
         VERBOSE.store(verbose, Ordering::Relaxed);
         let _ = FENCE_HANDLER.set(on_fence);
-        let mut params = [
+        let features = features.map(|f| CString::new(f).unwrap_or_default());
+        let mut params = vec![
             Param { key: 1, value: 0 },
             Param { key: 2, value: renderer_flags },
             Param { key: 3, value: on_fence_ptr() },
@@ -304,7 +318,10 @@ impl Renderer {
             Param { key: 5, value: u64::from(height) },
             Param { key: 6, value: on_debug_ptr() },
         ];
-        // SAFETY: params outlive the call; the callbacks are 'static extern fns.
+        if let Some(f) = &features {
+            params.push(Param { key: 11, value: f.as_ptr() as usize as u64 });
+        }
+        // SAFETY: params (and the features string) outlive the call; callbacks are 'static.
         ok("stream_renderer_init", unsafe { (self.api.init)(params.as_mut_ptr(), params.len() as u64) })
     }
 

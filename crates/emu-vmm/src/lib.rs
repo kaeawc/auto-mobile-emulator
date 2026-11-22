@@ -76,7 +76,12 @@ fn renderer(spec: &GpuSpec) -> Result<Arc<emu_gfxstream::Renderer>> {
     if std::env::var_os("EMU_GL_COMPOSITION").is_none() {
         flags |= emu_gfxstream::flags::VULKAN_NATIVE_SWAPCHAIN;
     }
-    r.init(spec.width, spec.height, flags, spec.verbose, virtio::gpu::fence_handler()).context("initializing the gfxstream renderer")?;
+    // Guest composition: the composer scans out through virtio-gpu (SET_SCANOUT_BLOB +
+    // RESOURCE_FLUSH), so frames reach emu-rs's display sink instead of only gfxstream's own
+    // window. EMU_RENDERER_FEATURES overrides (e.g. "HostComposition:enabled").
+    let features = std::env::var("EMU_RENDERER_FEATURES").unwrap_or_else(|_| "HostComposition:disabled".to_string());
+    r.init_with_features(spec.width, spec.height, flags, Some(&features), spec.verbose, virtio::gpu::fence_handler())
+        .context("initializing the gfxstream renderer")?;
     Ok(RENDERER.get_or_init(|| Arc::new(r)).clone())
 }
 

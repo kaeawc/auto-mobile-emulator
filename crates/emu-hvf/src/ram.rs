@@ -8,6 +8,41 @@ pub struct MemError {
     pub len: u64,
 }
 
+/// A host address range backing guest-visible memory, handed to native libraries (the GPU
+/// renderer) that read and write guest buffers directly. Constructed only from live mappings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HostRange {
+    pub(crate) ptr: *mut u8,
+    pub(crate) len: usize,
+}
+
+// SAFETY: plain address + length; whoever dereferences it upholds the mapping's lifetime.
+unsafe impl Send for HostRange {}
+// SAFETY: as above.
+unsafe impl Sync for HostRange {}
+
+impl HostRange {
+    pub fn as_ptr(&self) -> *mut u8 {
+        self.ptr
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Wraps memory returned by a native library (e.g. a renderer's mapped blob).
+    ///
+    /// # Safety
+    /// `ptr..ptr+len` must stay a valid mapping for as long as the range is used.
+    pub unsafe fn from_raw(ptr: *mut u8, len: usize) -> HostRange {
+        HostRange { ptr, len }
+    }
+}
+
 /// A contiguous block of guest RAM.
 ///
 /// The guest reads and writes this memory while device threads do the same through the
@@ -63,6 +98,14 @@ impl GuestRam {
 
     pub(crate) fn host_ptr(&self) -> *mut u8 {
         self.ptr
+    }
+
+    /// The host address range behind guest `[addr, addr + len)`, for native code that DMAs
+    /// into guest buffers. Valid while this `GuestRam` lives.
+    pub fn host_range(&self, addr: u64, len: usize) -> Option<HostRange> {
+        let off = self.offset(addr, len).ok()?;
+        // SAFETY: `off + len` is inside the mapping (checked above).
+        Some(HostRange { ptr: unsafe { self.ptr.add(off) }, len })
     }
 
     fn offset(&self, addr: u64, len: usize) -> std::result::Result<usize, MemError> {

@@ -1,5 +1,6 @@
 //! virtio devices over the MMIO transport.
 pub mod blk;
+pub mod gpu;
 pub mod mmio;
 pub mod queue;
 pub mod rng;
@@ -41,6 +42,10 @@ pub trait VirtioDevice: Send {
     fn notify(&mut self, queue: u16);
     /// Driver reset: stop workers and forget queue state.
     fn reset(&mut self);
+    /// Shared memory region `id` as (guest physical base, length), if the device has one.
+    fn shm_region(&self, _id: u8) -> Option<(u64, u64)> {
+        None
+    }
 }
 
 /// The transport's interrupt status register and the level-triggered line it drives.

@@ -57,6 +57,15 @@ name = "emu-fdt"
 version = "0.1.0"
 
 [[package]]
+name = "emu-gfxstream"
+version = "0.1.0"
+dependencies = [
+ "emu-hvf",
+ "libc",
+ "thiserror",
+]
+
+[[package]]
 name = "emu-hvf"
 version = "0.1.0"
 dependencies = [
@@ -70,6 +79,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "emu-fdt",
+ "emu-gfxstream",
  "emu-hvf",
  "flate2",
  "libc",

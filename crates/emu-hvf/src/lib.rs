@@ -13,7 +13,7 @@ mod ram;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-pub use ram::{GuestRam, MemError};
+pub use ram::{GuestRam, HostRange, MemError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -96,13 +96,44 @@ pub struct Vm {
     _private: (),
 }
 
+/// VM-wide settings fixed at creation.
+#[derive(Clone, Copy, Debug)]
+pub struct VmConfig {
+    /// Guest physical address bits (clamped to what the host supports).
+    pub ipa_bits: u32,
+    /// Map guest memory at 4 KiB granularity instead of the 16 KiB default (macOS 26+). Needed
+    /// for host-visible GPU memory, which the guest maps at 4 KiB-aligned offsets.
+    pub granule_4k: bool,
+}
+
+impl Default for VmConfig {
+    fn default() -> Self {
+        VmConfig { ipa_bits: 40, granule_4k: true }
+    }
+}
+
 impl Vm {
     pub fn new() -> Result<Vm> {
+        Vm::with_config(VmConfig::default())
+    }
+
+    pub fn with_config(cfg: VmConfig) -> Result<Vm> {
         if VM_EXISTS.swap(true, Ordering::SeqCst) {
             return Err(Error::AlreadyCreated);
         }
-        // SAFETY: plain FFI calls; a null config selects the defaults.
-        let rc = unsafe { ffi::hv_vm_create(std::ptr::null_mut()) };
+        // SAFETY: plain FFI calls on a config object we own; the framework retains it.
+        let rc = unsafe {
+            let config = ffi::hv_vm_config_create();
+            let mut max = 0u32;
+            if ffi::hv_vm_config_get_max_ipa_size(&mut max) == 0 {
+                let _ = ffi::hv_vm_config_set_ipa_size(config, cfg.ipa_bits.min(max));
+            }
+            if cfg.granule_4k {
+                // Unsupported before macOS 26: keep the default granule then.
+                let _ = ffi::hv_vm_config_set_ipa_granule(config, 0);
+            }
+            ffi::hv_vm_create(config)
+        };
         if rc != 0 {
             VM_EXISTS.store(false, Ordering::SeqCst);
             return check("hv_vm_create", rc).map(|()| unreachable!());
@@ -142,6 +173,22 @@ impl Vm {
         // SAFETY: `ram` owns a page-aligned mapping of exactly `len` bytes that outlives the VM
         // mapping as long as callers keep it alive, which `Machine` does (it holds an Arc).
         check("hv_vm_map", unsafe { ffi::hv_vm_map(ram.host_ptr().cast(), ram.base(), ram.len() as usize, RWX) })
+    }
+
+    /// Maps host memory the VMM doesn't own as guest memory (e.g. a GPU renderer's
+    /// host-visible allocation) at `ipa`. Callable from any thread while the VM exists.
+    ///
+    /// The caller must keep `[host, host + len)` mapped until [`Vm::unmap_raw`]; the guest
+    /// reads and writes it directly.
+    pub fn map_raw(host: HostRange, ipa: u64) -> Result<()> {
+        const RW: u64 = 0b011;
+        // SAFETY: the range comes from a live host mapping (see the contract above).
+        check("hv_vm_map", unsafe { ffi::hv_vm_map(host.ptr.cast(), ipa, host.len, RW) })
+    }
+
+    pub fn unmap_raw(ipa: u64, len: usize) -> Result<()> {
+        // SAFETY: plain FFI call; unmapping a range only affects the guest view.
+        check("hv_vm_unmap", unsafe { ffi::hv_vm_unmap(ipa, len) })
     }
 
     /// Raises or lowers a shared peripheral interrupt. Callable from any thread.

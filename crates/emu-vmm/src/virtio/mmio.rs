@@ -35,6 +35,7 @@ struct State {
     driver_features_sel: u32,
     driver_features: u64,
     queue_sel: u32,
+    shm_sel: u32,
     queues: Vec<QueueRegs>,
     status: u32,
     config_generation: u32,
@@ -59,6 +60,7 @@ impl MmioTransport {
                 driver_features_sel: 0,
                 driver_features: 0,
                 queue_sel: 0,
+                shm_sel: 0,
                 queues: vec![QueueRegs::default(); nq],
                 status: 0,
                 config_generation: 0,
@@ -140,6 +142,16 @@ impl MmioDevice for MmioTransport {
                 }
             }
             0x044 => u32::from(q.is_some_and(|q| q.ready)),
+            0x0b0..=0x0bc => {
+                // Shared memory region: length then base, low/high words; absent = all ones.
+                match s.dev.as_ref().and_then(|d| d.shm_region(s.shm_sel as u8)) {
+                    Some((base, len)) => {
+                        let v = if offset < 0x0b8 { len } else { base };
+                        if offset & 4 == 0 { v as u32 } else { (v >> 32) as u32 }
+                    }
+                    None => u32::MAX,
+                }
+            }
             0x060 => self.irq.status(),
             0x070 => s.status,
             0x0fc => s.config_generation,
@@ -172,6 +184,7 @@ impl MmioDevice for MmioTransport {
             }
             0x024 => s.driver_features_sel = v,
             0x030 => s.queue_sel = v,
+            0x0ac => s.shm_sel = v,
             0x038 => {
                 if let Some(q) = s.queues.get_mut(sel) {
                     q.num = if v.is_power_of_two() && v <= u32::from(max) { v } else { 0 };

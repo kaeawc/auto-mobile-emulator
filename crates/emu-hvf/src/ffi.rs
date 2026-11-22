@@ -22,6 +22,11 @@ pub const GICR_ISPENDR0: u32 = 0x10200;
 #[link(name = "Hypervisor", kind = "framework")]
 unsafe extern "C" {
     pub fn hv_vm_create(config: *mut c_void) -> i32;
+    pub fn hv_vm_config_create() -> *mut c_void;
+    pub fn hv_vm_config_get_max_ipa_size(bits: *mut u32) -> i32;
+    pub fn hv_vm_config_set_ipa_size(config: *mut c_void, bits: u32) -> i32;
+    pub fn hv_vm_config_set_ipa_granule(config: *mut c_void, granule: u32) -> i32;
+    pub fn hv_vm_unmap(ipa: u64, size: usize) -> i32;
     pub fn hv_vm_destroy() -> i32;
     pub fn hv_vm_map(addr: *mut c_void, ipa: u64, size: usize, flags: u64) -> i32;
 

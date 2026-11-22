@@ -71,7 +71,10 @@ fn renderer(spec: &GpuSpec) -> Result<Arc<emu_gfxstream::Renderer>> {
         return Ok(r.clone());
     }
     let r = emu_gfxstream::Renderer::load(&spec.lib64).context("loading the gfxstream renderer")?;
-    let flags = emu_gfxstream::flags::USE_GLES | emu_gfxstream::flags::USE_VK;
+    let mut flags = emu_gfxstream::flags::USE_GLES | emu_gfxstream::flags::USE_VK;
+    if std::env::var_os("EMU_GL_COMPOSITION").is_none() {
+        flags |= emu_gfxstream::flags::VULKAN_NATIVE_SWAPCHAIN;
+    }
     r.init(spec.width, spec.height, flags, spec.verbose, virtio::gpu::fence_handler()).context("initializing the gfxstream renderer")?;
     Ok(RENDERER.get_or_init(|| Arc::new(r)).clone())
 }

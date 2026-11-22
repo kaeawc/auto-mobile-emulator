@@ -42,6 +42,9 @@ pub mod flags {
     pub const USE_EGL: u64 = 1 << 0;
     pub const USE_GLES: u64 = 1 << 4;
     pub const USE_VK: u64 = 1 << 5;
+    /// Vulkan composition and posting. On macOS the GL post worker hands work to an
+    /// emulator-UI-thread hook that standalone hosts don't service (compose never completes).
+    pub const VULKAN_NATIVE_SWAPCHAIN: u64 = 1 << 8;
 }
 
 pub const FENCE_FLAG: u32 = 1 << 0;

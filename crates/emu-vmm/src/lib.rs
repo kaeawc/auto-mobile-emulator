@@ -84,6 +84,8 @@ pub struct MachineConfig {
     pub initrd: Option<Vec<u8>>,
     pub cmdline: String,
     pub disks: Vec<DiskSpec>,
+    /// fsync persistent disks when the guest flushes (`-disk-cache fsync`); default off.
+    pub disk_fsync: bool,
     pub rng: bool,
     /// Host TCP port bridged to the guest's adbd (stock: console port + 1).
     pub adb_port: Option<u16>,
@@ -158,6 +160,7 @@ pub fn run(cfg: MachineConfig, stop: Arc<AtomicBool>) -> Result<Outcome> {
         initrd,
         virtio_slots: VIRTIO_MMIO_SLOTS,
         pci: cfg.gpu.is_some(),
+        goldfish_pipe: cfg.gpu.is_some(),
         rng_seed: random_bytes(),
         kaslr_seed: u64::from_le_bytes(random_bytes()),
     })?;
@@ -199,7 +202,10 @@ pub fn run(cfg: MachineConfig, stop: Arc<AtomicBool>) -> Result<Outcome> {
     let mut slots: Vec<Option<Box<dyn virtio::VirtioDevice>>> = (0..VIRTIO_MMIO_SLOTS).map(|_| None).collect();
     for d in &cfg.disks {
         let disk = match d.mode {
-            DiskMode::Persistent => disk::Disk::persistent(&d.path),
+            DiskMode::Persistent => disk::Disk::persistent(&d.path).map(|mut disk| {
+                disk.set_fsync(cfg.disk_fsync);
+                disk
+            }),
             DiskMode::Ephemeral => disk::Disk::ephemeral(&d.path),
         }
         .with_context(|| format!("opening {}", d.path.display()))?;
@@ -237,6 +243,14 @@ pub fn run(cfg: MachineConfig, stop: Arc<AtomicBool>) -> Result<Outcome> {
         let mut registry = pipe::PipeRegistry::default();
         registry.register("qemud:adb", Box::new(svc));
         registry.register("qemud:boot-properties", Box::new(pipe::qemud::BootProperties { props: cfg.boot_props.clone() }));
+        registry.register("refcount", Box::new(devices::goldfish_pipe::RefCount));
+        registry.register("GLProcessPipe", Box::new(devices::goldfish_pipe::GlProcess::default()));
+        let registry = Arc::new(registry);
+        // Graphics pipes never use vsock; they need the goldfish pipe device.
+        if cfg.gpu.is_some() {
+            let gp = devices::goldfish_pipe::GoldfishPipe::new(mem.clone(), registry.clone(), spi(GOLDFISH_PIPE_SPI));
+            bus.insert(GOLDFISH_PIPE_BASE, GOLDFISH_PIPE_SIZE, gp);
+        }
         slots[slots::VSOCK as usize] = Some(Box::new(virtio::vsock::Vsock::new(3, registry, events, rx)));
         pipe::adb::AdbService::announce_port(port);
     }

@@ -37,6 +37,11 @@ pub const INITRD_ADDR: u64 = RAM_BASE + 0x0800_0000;
 pub const GPU_SHM_BASE: u64 = 0xc_0000_0000;
 pub const GPU_SHM_SIZE: u64 = 8 << 30;
 
+/// Goldfish pipe (stock address and interrupt).
+pub const GOLDFISH_PIPE_BASE: u64 = 0x0a06_0000;
+pub const GOLDFISH_PIPE_SIZE: u64 = 0x2000;
+pub const GOLDFISH_PIPE_SPI: u32 = 20;
+
 /// PCIe (ECAM) host, like stock: config space, a 32-bit MMIO window and a 64-bit window.
 pub const PCI_ECAM_BASE: u64 = 0x3f00_0000;
 pub const PCI_ECAM_SIZE: u64 = 0x0100_0000;

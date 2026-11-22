@@ -14,6 +14,8 @@ pub struct BoardInfo<'a> {
     pub virtio_slots: u32,
     /// Describe the PCIe host (goldfish address space lives there).
     pub pci: bool,
+    /// Describe the goldfish pipe device.
+    pub goldfish_pipe: bool,
     pub rng_seed: [u8; 64],
     pub kaslr_seed: u64,
 }
@@ -118,6 +120,14 @@ pub fn build(b: &BoardInfo) -> Result<Vec<u8>, emu_fdt::FdtError> {
         f.end_node();
     }
 
+    if b.goldfish_pipe {
+        f.begin_node(&format!("goldfish_pipe@{GOLDFISH_PIPE_BASE:x}"));
+        f.prop_strs("compatible", &["google,android-pipe", "generic,android-pipe"]);
+        f.prop_reg("reg", &[(GOLDFISH_PIPE_BASE, GOLDFISH_PIPE_SIZE)]);
+        f.prop_cells("interrupts", &[GIC_SPI, GOLDFISH_PIPE_SPI, IRQ_TYPE_LEVEL_HIGH]);
+        f.end_node();
+    }
+
     if b.pci {
         f.begin_node(&format!("pcie@{PCI_MMIO32_BASE:x}"));
         f.prop_str("compatible", "pci-host-ecam-generic");
@@ -194,6 +204,7 @@ mod tests {
             initrd: Some((INITRD_ADDR, INITRD_ADDR + 100)),
             virtio_slots: VIRTIO_MMIO_SLOTS,
             pci: true,
+            goldfish_pipe: true,
             rng_seed: [0; 64],
             kaslr_seed: 1,
         })

@@ -19,6 +19,8 @@ const CHUNK: u64 = 4096;
 const ZERO_BUF: u64 = 1 << 20;
 
 pub struct Disk {
+    /// fsync on guest FLUSH (see `set_fsync`).
+    fsync: bool,
     file: File,
     size: u64,
     /// Granularity `F_PUNCHHOLE` accepts: the host filesystem's block size.
@@ -102,13 +104,13 @@ impl Disk {
         let size = file.metadata()?.len();
         let block =
             rustix::fs::fstatfs(&file).ok().map(|s| u64::from(s.f_bsize)).filter(|b| b.is_power_of_two() && *b >= 512).unwrap_or(CHUNK);
-        Ok(Disk { file, size, block, punch: true, overlay: None })
+        Ok(Disk { file, size, block, punch: true, overlay: None, fsync: false })
     }
 
     pub fn ephemeral(path: &Path) -> io::Result<Disk> {
         let file = File::open(path)?;
         let size = file.metadata()?.len();
-        Ok(Disk { file, size, block: CHUNK, punch: false, overlay: Some(Overlay::default()) })
+        Ok(Disk { file, size, block: CHUNK, punch: false, overlay: Some(Overlay::default()), fsync: false })
     }
 
     pub fn size(&self) -> u64 {
@@ -214,8 +216,15 @@ impl Disk {
         }
     }
 
+    /// Whether guest flushes reach the drive (`-disk-cache fsync`). Off by default: writes are
+    /// already in the host page cache, which survives an emulator crash; only a host crash or
+    /// power loss can lose them.
+    pub fn set_fsync(&mut self, on: bool) {
+        self.fsync = on;
+    }
+
     pub fn flush(&self) -> io::Result<()> {
-        if self.overlay.is_some() {
+        if self.overlay.is_some() || !self.fsync {
             return Ok(());
         }
         // Plain fsync hands dirty pages to the drive. std's sync_data/sync_all use F_FULLFSYNC on

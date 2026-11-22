@@ -191,6 +191,7 @@ impl Instance {
             initrd: Some(initrd),
             cmdline,
             disks,
+            disk_fsync: opts.disk_fsync,
             rng: true,
             adb_port: Some(self.console_port + 1),
             gpu: self.gpu_lib64.as_ref().zip(self.display.as_ref()).map(|(lib64, display)| emu_vmm::GpuSpec {

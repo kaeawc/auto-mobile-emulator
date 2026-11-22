@@ -25,6 +25,8 @@ options:
   -show-kernel      print the guest console
   -verbose          diagnostics, including vCPU exit counts at shutdown
   -no-boot-anim     skip the boot animation
+  -disk-cache MODE  unsafe (default: guest flushes stay in the host page cache) or fsync
+  -gpu MODE         off disables host rendering; swiftshader/lavapipe pick software Vulkan
 Other SDK emulator flags are accepted.
 ";
 
@@ -93,6 +95,8 @@ pub struct Opts {
     pub no_window: bool,
     /// `-gpu MODE`: `off`/`none` disables host rendering; anything else uses gfxstream.
     pub gpu: Option<String>,
+    /// `-disk-cache unsafe|fsync`: whether guest disk flushes fsync on the host.
+    pub disk_fsync: bool,
     pub create_avd: Option<String>,
     pub sysdir: Option<String>,
     /// WxH@DPI
@@ -135,6 +139,13 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts> {
             "no-boot-anim" => o.no_boot_anim = true,
             "no-window" => o.no_window = true,
             "gpu" => o.gpu = Some(value(flag)?),
+            "disk-cache" => {
+                o.disk_fsync = match value(flag)?.as_str() {
+                    "fsync" | "writethrough" | "safe" => true,
+                    "unsafe" | "writeback" | "none" => false,
+                    other => bail!("-disk-cache takes unsafe or fsync, not '{other}'"),
+                }
+            }
             "create-avd" => o.create_avd = Some(value(flag)?),
             "sysdir" => o.sysdir = Some(value(flag)?),
             "lcd" => o.lcd = Some(parse_lcd(&value(flag)?)?),

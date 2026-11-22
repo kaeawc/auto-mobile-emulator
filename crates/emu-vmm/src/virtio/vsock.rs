@@ -97,8 +97,8 @@ pub fn event_channel() -> (Sender<WorkerEvent>, Receiver<WorkerEvent>) {
 }
 
 impl Vsock {
-    pub fn new(guest_cid: u64, registry: PipeRegistry, events: Sender<WorkerEvent>, rx: Receiver<WorkerEvent>) -> Vsock {
-        Vsock { guest_cid, registry: Arc::new(registry), events, rx: Some(rx), worker: None }
+    pub fn new(guest_cid: u64, registry: Arc<PipeRegistry>, events: Sender<WorkerEvent>, rx: Receiver<WorkerEvent>) -> Vsock {
+        Vsock { guest_cid, registry, events, rx: Some(rx), worker: None }
     }
 
     fn stop_worker(&mut self) {

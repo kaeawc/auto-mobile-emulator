@@ -76,12 +76,32 @@ fn renderer(spec: &GpuSpec) -> Result<Arc<emu_gfxstream::Renderer>> {
     if std::env::var_os("EMU_GL_COMPOSITION").is_none() {
         flags |= emu_gfxstream::flags::VULKAN_NATIVE_SWAPCHAIN;
     }
-    // Guest composition: the composer scans out through virtio-gpu (SET_SCANOUT_BLOB +
-    // RESOURCE_FLUSH), so frames reach emu-rs's display sink instead of only gfxstream's own
-    // window. EMU_RENDERER_FEATURES overrides (e.g. "HostComposition:enabled").
-    let features = std::env::var("EMU_RENDERER_FEATURES").unwrap_or_else(|_| "HostComposition:disabled".to_string());
-    r.init_with_features(spec.width, spec.height, flags, Some(&features), spec.verbose, virtio::gpu::fence_handler())
+    // EMU_RENDERER_FEATURES overrides renderer features, e.g. "HostComposition:disabled".
+    let features = std::env::var("EMU_RENDERER_FEATURES").ok();
+    r.init_with_features(spec.width, spec.height, flags, features.as_deref(), spec.verbose, virtio::gpu::fence_handler())
         .context("initializing the gfxstream renderer")?;
+    // Host composition posts frames to the renderer's display; read them back for emu-rs's
+    // display sink (screenshots, desktop, streaming).
+    let display = spec.display.clone();
+    let primary = std::sync::atomic::AtomicU32::new(u32::MAX);
+    let posted = r.set_post_callback(Box::new(move |f| {
+        // The first display that posts is the primary one.
+        let _ = primary.compare_exchange(u32::MAX, f.display, std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed);
+        if f.display == primary.load(std::sync::atomic::Ordering::Relaxed) {
+            // 0x80E1 = GL_BGRA → virtio-gpu B8G8R8A8 (1); GL_RGBA → R8G8B8A8 (67).
+            let format = if f.gl_format == 0x80e1 { 1 } else { 67 };
+            if f.top_down {
+                display.present(f.width, f.height, f.width * 4, format, f.pixels);
+            } else {
+                let row = f.width as usize * 4;
+                let flipped: Vec<u8> = f.pixels.chunks(row).rev().flatten().copied().collect();
+                display.present(f.width, f.height, f.width * 4, format, &flipped);
+            }
+        }
+    }));
+    if let Err(e) = posted {
+        eprintln!("emu: no host frame readback ({e}); screenshots come from the guest only");
+    }
     Ok(RENDERER.get_or_init(|| Arc::new(r)).clone())
 }
 
@@ -101,6 +121,8 @@ pub struct MachineConfig {
     pub gpu: Option<GpuSpec>,
     /// Served to the guest's `qemu-props` over the `qemud:boot-properties` pipe.
     pub boot_props: Vec<(String, String)>,
+    /// Guest notifications over `QemuMiscPipe` (`bootcomplete`, `heartbeat`).
+    pub on_guest_event: Option<pipe::misc::GuestEvent>,
     /// Live sensor values (served over `qemud:sensors`, changed by the console).
     pub sensors: Arc<pipe::sensors::Sensors>,
     /// Touchscreen size; enables the virtio-input touchscreen, keyboard and rotary devices.
@@ -255,6 +277,7 @@ pub fn run(cfg: MachineConfig, stop: Arc<AtomicBool>) -> Result<Outcome> {
         registry.register("qemud:adb", Box::new(svc));
         registry.register("qemud:boot-properties", Box::new(pipe::qemud::BootProperties { props: cfg.boot_props.clone() }));
         registry.register("refcount", Box::new(devices::goldfish_pipe::RefCount));
+        registry.register("QemuMiscPipe", Box::new(pipe::misc::MiscService { on_event: cfg.on_guest_event.clone() }));
         registry.register("qemud:sensors", Box::new(pipe::sensors::SensorService { sensors: cfg.sensors.clone() }));
         registry.register("GLProcessPipe", Box::new(devices::goldfish_pipe::GlProcess::default()));
         let registry = Arc::new(registry);

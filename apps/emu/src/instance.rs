@@ -223,6 +223,15 @@ impl Instance {
             boot_props: self.boot_props(),
             input: Some((self.avd.lcd().0, self.avd.lcd().1)),
             sensors: self.sensors.clone(),
+            on_guest_event: {
+                let started = std::time::Instant::now();
+                Some(std::sync::Arc::new(move |event: &str| {
+                    if event == "bootcomplete" {
+                        // On stdout, like the launch line: tools can watch for it.
+                        println!("emu: boot completed in {:.1}s", started.elapsed().as_secs_f64());
+                    }
+                }))
+            },
             on_input: {
                 let slot = self.inputs.clone();
                 Some(std::sync::Arc::new(move |i| *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(i)))

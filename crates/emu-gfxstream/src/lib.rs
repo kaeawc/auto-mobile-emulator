@@ -247,7 +247,13 @@ fn ok(name: &'static str, rc: c_int) -> Result<()> {
 /// The initialized renderer. Calls may come from any thread.
 pub struct Renderer {
     api: Api,
+    handle: *mut c_void,
 }
+
+// SAFETY: the dlopen handle is only used for dlsym, which is thread-safe.
+unsafe impl Send for Renderer {}
+// SAFETY: as above; renderer calls are thread-safe by the stream_renderer contract.
+unsafe impl Sync for Renderer {}
 
 /// The renderer library inside `lib64`.
 pub const BACKEND: &str = "libgfxstream_backend.dylib";
@@ -285,7 +291,7 @@ impl Renderer {
             dlopen(&dep, true)?;
         }
         let h = dlopen(&lib64.join(BACKEND), false)?;
-        Ok(Renderer { api: Api::load(h)? })
+        Ok(Renderer { api: Api::load(h)?, handle: h })
     }
 
     /// Initializes the renderer for a `width`×`height` primary display. `on_fence` runs on a
@@ -579,6 +585,71 @@ pub fn link_beside_exe(lib64: &Path) -> Option<PathBuf> {
         Err(_) => std::os::unix::fs::symlink(lib64, &link).ok()?,
     }
     Some(link)
+}
+
+/// A frame the renderer posted to a display (read back to host memory).
+pub struct PostedFrame<'a> {
+    pub display: u32,
+    pub width: u32,
+    pub height: u32,
+    /// GL format of `pixels` (0x1908 RGBA, 0x80E1 BGRA).
+    pub gl_format: u32,
+    /// Rows are bottom-up when false.
+    pub top_down: bool,
+    pub pixels: &'a [u8],
+}
+
+type PostHandler = Box<dyn Fn(PostedFrame<'_>) + Send + Sync>;
+static POST_HANDLER: OnceLock<PostHandler> = OnceLock::new();
+
+#[allow(clippy::too_many_arguments)]
+extern "C" fn on_post(
+    _ctx: *mut c_void,
+    display: u32,
+    width: c_int,
+    height: c_int,
+    ydir: c_int,
+    format: c_int,
+    _ty: c_int,
+    pixels: *mut u8,
+) {
+    let (Ok(w), Ok(h)) = (u32::try_from(width), u32::try_from(height)) else { return };
+    if pixels.is_null() || w == 0 || h == 0 {
+        return;
+    }
+    let Some(handler) = POST_HANDLER.get() else { return };
+    // SAFETY: the renderer passes a w*h*4 readback buffer valid for the call.
+    let px = unsafe { std::slice::from_raw_parts(pixels, w as usize * h as usize * 4) };
+    handler(PostedFrame { display, width: w, height: h, gl_format: format as u32, top_down: ydir != -1, pixels: px });
+}
+
+type PostFn = extern "C" fn(*mut c_void, u32, c_int, c_int, c_int, c_int, c_int, *mut u8);
+type GetFb = unsafe extern "C" fn() -> *mut c_void;
+type SetPostCallback = unsafe extern "C" fn(*mut c_void, Option<PostFn>, *mut c_void, u32, bool);
+
+impl Renderer {
+    /// Receives every frame the renderer posts to displays 0–3 (host composition), read back
+    /// asynchronously as BGRA. This is how the stock emulator streams its screen. Uses the
+    /// renderer's exported C++ `FrameBuffer::getFB()` / `setPostCallback`.
+    pub fn set_post_callback(&self, handler: PostHandler) -> Result<()> {
+        let _ = POST_HANDLER.set(handler);
+        let h = self.handle;
+        let get_fb: GetFb = sym!(h, "_ZN9gfxstream4host11FrameBuffer5getFBEv");
+        let set_cb: SetPostCallback = sym!(h, "_ZN9gfxstream4host11FrameBuffer15setPostCallbackEPFvPvjiiiiiPhES2_jb");
+        // SAFETY: getFB returns the renderer's singleton (or null before init); setPostCallback
+        // is a member function whose `this` is the first argument (Itanium C++ ABI).
+        unsafe {
+            let fb = get_fb();
+            if fb.is_null() {
+                return Err(Error::Call("FrameBuffer::getFB", 0));
+            }
+            // The guest composer may create its primary display with a non-zero host id.
+            for display in 0..4 {
+                set_cb(fb, Some(on_post as PostFn), std::ptr::null_mut(), display, true);
+            }
+        }
+        Ok(())
+    }
 }
 
 /// A renderer mapping widened to `len` bytes (whole guest pages). Renderer allocations are

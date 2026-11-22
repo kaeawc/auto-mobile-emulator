@@ -14,11 +14,12 @@ to use fewer resources.
 | VM core | vCPUs, the framework's in-kernel GICv3, PSCI (SMP, power off and reset), arch timer, PL011 console, PL031 RTC |
 | Board | Stock memory map and virtio-mmio slots, so the unmodified fstab and first-stage init find `vda`–`vde` and their by-name paths |
 | Storage | virtio-blk with indirect descriptors, event-idx, and discard/write-zeroes (hole punching). System and vendor are copy-on-write in memory; userdata, cache and metadata persist per AVD. Userdata is created by a native ext4 formatter (no `mkfs.ext4`) |
-| Boot | Kernel, first-stage init, dm-linear `super`, second-stage init, metadata encryption of `/data`, APEX activation, adbd |
+| Boot | Full Android boot to `sys.boot_completed` in about 11–20 s on a warm boot (stock, cold: 51 s); first boot formats and encrypts `/data` |
 | adb | virtio-vsock with a host bridge on `console port + 1`, announced to the adb server. `adb shell`/`root`/`push` work, and the device shows up about 8 s after launch on a warm boot |
-| Console | `adb emu` / telnet console with token auth: `avd name`, `ping`, `kill` |
+| Console | `adb emu` / telnet console with token auth: `avd name`, `ping`, `kill`, `sensor set\|get\|status`, `event send\|text`, `touch`, `screenshot`, `frames` |
 | Discovery | `-list-avds`, `pid_<pid>.ini` running-instance file, `emulator-<port>` serial on stdout |
-| Graphics | **Next milestone.** SurfaceFlinger needs a host GLES/Vulkan renderer (gfxstream); until then the framework doesn't finish booting |
+| Graphics | virtio-gpu with gfxstream contexts, rendered on the host GPU: GLES through ANGLE on Metal, Vulkan on MoltenVK (lavapipe fallback), Vulkan composition. Host-visible memory via blob mapping; goldfish address space (PCIe) and goldfish pipe for the ranchu gralloc |
+| Input & sensors | virtio-input touchscreen, keyboard and rotary; `qemud:sensors` with live values |
 | Desktop app | Rune app (`desktop/`): AVD list, start/stop, live guest console |
 
 ## Quick start

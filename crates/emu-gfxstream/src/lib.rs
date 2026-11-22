@@ -8,8 +8,11 @@
 // `sym!` transmutes dlsym results to the type of the struct field it initializes.
 #![allow(clippy::missing_transmute_annotations)]
 
+mod macho;
+
+use std::collections::HashSet;
 use std::ffi::{CString, c_char, c_int, c_void};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
@@ -240,13 +243,42 @@ pub struct Renderer {
     api: Api,
 }
 
+/// The renderer library inside `lib64`.
+pub const BACKEND: &str = "libgfxstream_backend.dylib";
+
+/// The libraries `root` (a file in `lib64`) links from `lib64` itself, directly or indirectly,
+/// dependencies before their dependents; `root` is not included. Only `@rpath/<name>` and
+/// `@loader_path/<name>` references to files present in `lib64` count.
+pub fn bundled_deps(lib64: &Path, root: &str) -> Vec<PathBuf> {
+    fn visit(lib64: &Path, name: &str, seen: &mut HashSet<String>, out: &mut Vec<PathBuf>) {
+        if !seen.insert(name.to_string()) {
+            return;
+        }
+        let path = lib64.join(name);
+        for dep in macho::dylib_deps(&path).unwrap_or_default() {
+            let Some(dep) = dep.strip_prefix("@rpath/").or_else(|| dep.strip_prefix("@loader_path/")) else { continue };
+            if !dep.contains('/') && lib64.join(dep).is_file() {
+                visit(lib64, dep, seen, out);
+            }
+        }
+        out.push(path);
+    }
+    let mut out = Vec::new();
+    visit(lib64, root, &mut HashSet::new(), &mut out);
+    out.pop();
+    out
+}
+
 impl Renderer {
-    /// Loads the renderer from the SDK's `emulator/lib64`. Its dependencies are found through
-    /// the executable's rpath (see `apps/emu/build.rs`).
+    /// Loads the renderer from a `lib64` directory: the SDK's `emulator/lib64` or one installed by
+    /// `emu -provision-renderer`. The backend's `@rpath` dependencies are preloaded from the same
+    /// directory, leaves first, so dyld finds each one already loaded by install name and the
+    /// executable needs no rpath to it.
     pub fn load(lib64: &Path) -> Result<Renderer> {
-        // Load the common runtime globally first so the backend's @rpath dependency resolves to it.
-        dlopen(&lib64.join("libemugl_common.dylib"), true)?;
-        let h = dlopen(&lib64.join("libgfxstream_backend.dylib"), false)?;
+        for dep in bundled_deps(lib64, BACKEND) {
+            dlopen(&dep, true)?;
+        }
+        let h = dlopen(&lib64.join(BACKEND), false)?;
         Ok(Renderer { api: Api::load(h)? })
     }
 
@@ -430,9 +462,10 @@ fn on_debug_ptr() -> u64 {
     on_debug as DebugCb as usize as u64
 }
 
-/// Points the renderer at the SDK's Vulkan loader and ICDs (MoltenVK by default). gfxstream
-/// resolves `lib64/vulkan/*` relative to its "launcher directory", which defaults to the
-/// executable's directory; set it to the SDK's `emulator/`.
+/// Points the renderer at its Vulkan loader and ICDs (MoltenVK by default). gfxstream resolves
+/// `lib64/vulkan/*` and `lib64/gles_*` relative to its "launcher directory", which defaults to
+/// the executable's directory; set it to the parent of the renderer's `lib64` (the SDK's
+/// `emulator/`, or `<sdk>/emu-rs/renderer/<revision>/`).
 ///
 /// Call before spawning threads that might read the environment.
 pub fn configure_environment(emulator_dir: &Path, icd: Option<&str>) {
@@ -453,6 +486,29 @@ pub fn configure_environment(emulator_dir: &Path, icd: Option<&str>) {
     }
 }
 
+/// Makes `<exe dir>/lib64` lead to `lib64`. gfxstream `dlopen`s some libraries by bare name
+/// (`libshadertranslator.dylib`), which dyld resolves only through the executable's rpaths, one
+/// of which is `@executable_path/lib64` (`apps/emu/build.rs`). In an SDK overlay `lib64` is
+/// already there (a real directory, left alone); for a build in `target/` a symlink is created,
+/// or repointed when it leads to another renderer (an old revision, another SDK). Best effort:
+/// skipped if the directory isn't writable. Returns the link when it leads to `lib64`.
+pub fn link_beside_exe(lib64: &Path) -> Option<PathBuf> {
+    let link = std::env::current_exe().ok()?.parent()?.join("lib64");
+    match std::fs::read_link(&link) {
+        Ok(target) if target == lib64 => return Some(link),
+        Ok(_) => {
+            // Replace atomically: a concurrent emu may be resolving through the old link.
+            let tmp = link.with_file_name(format!(".lib64.{}", std::process::id()));
+            let _ = std::fs::remove_file(&tmp);
+            std::os::unix::fs::symlink(lib64, &tmp).ok()?;
+            std::fs::rename(&tmp, &link).ok()?;
+        }
+        Err(_) if link.symlink_metadata().is_ok() => return None, // a real directory
+        Err(_) => std::os::unix::fs::symlink(lib64, &link).ok()?,
+    }
+    Some(link)
+}
+
 /// A renderer mapping widened to `len` bytes (whole guest pages). Renderer allocations are
 /// page-aligned and page-granular, so the extra tail is part of the same allocation.
 pub fn page_range(host: HostRange, len: usize) -> HostRange {
@@ -460,8 +516,29 @@ pub fn page_range(host: HostRange, len: usize) -> HostRange {
     unsafe { HostRange::from_raw(host.as_ptr(), len.max(host.len())) }
 }
 
-/// The SDK's renderer directory, if installed.
-pub fn sdk_lib64(sdk_root: &Path) -> Option<std::path::PathBuf> {
-    let p = sdk_root.join("emulator/lib64");
-    p.join("libgfxstream_backend.dylib").is_file().then_some(p)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bundled_deps_are_ordered_leaves_first() {
+        let dir = std::env::temp_dir().join(format!("emu-gfxstream-deps-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let write = |name: &str, deps: &[&str]| {
+            std::fs::write(dir.join(name), macho::tests::fake_dylib(&format!("@rpath/{name}"), deps)).expect("write");
+        };
+        // backend -> common -> {metrics -> abseil, abseil}; backend -> abseil; a cycle back to
+        // common; system and missing libraries are skipped; unrelated files aren't loaded.
+        write(BACKEND, &["@rpath/libcommon.dylib", "@rpath/libabseil.dylib", "/usr/lib/libc++.1.dylib", "@rpath/libmissing.dylib"]);
+        write("libcommon.dylib", &["@rpath/libmetrics.dylib", "@loader_path/libabseil.dylib"]);
+        write("libmetrics.dylib", &["@rpath/libabseil.dylib", "@rpath/libcommon.dylib"]);
+        write("libabseil.dylib", &[]);
+        write("libunrelated.dylib", &[]);
+        let order: Vec<String> =
+            bundled_deps(&dir, BACKEND).iter().map(|p| p.file_name().unwrap_or_default().to_string_lossy().into_owned()).collect();
+        assert_eq!(order, ["libabseil.dylib", "libmetrics.dylib", "libcommon.dylib"]);
+        assert!(bundled_deps(&dir.join("nowhere"), BACKEND).is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

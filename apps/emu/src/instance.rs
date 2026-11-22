@@ -80,9 +80,17 @@ impl Instance {
             None => free_port_pair().context("no free console/adb port pair in 5554..5682")?,
         };
         let gpu_off = matches!(opts.gpu.as_deref(), Some("off" | "none"));
-        let gpu_lib64 = if gpu_off { None } else { avd.sdk_root.as_deref().and_then(emu_gfxstream_lib64) };
+        let gpu_lib64 = if gpu_off { None } else { avd.sdk_root.as_deref().and_then(emu_sdk::renderer::find_lib64) };
         if gpu_lib64.is_none() && !gpu_off {
-            eprintln!("emu: no gfxstream renderer in the SDK (emulator/lib64); booting without graphics");
+            eprintln!(
+                "emu: no gfxstream renderer in the SDK (emulator/lib64 or emu-rs/renderer); booting without graphics \
+                 (install it with emu -provision-renderer)"
+            );
+        }
+        if opts.verbose
+            && let Some(lib64) = &gpu_lib64
+        {
+            eprintln!("emu: gfxstream renderer from {}", lib64.display());
         }
         if let Some(lib64) = &gpu_lib64
             && let Some(emulator_dir) = lib64.parent()
@@ -92,7 +100,10 @@ impl Instance {
                 Some("lavapipe") => Some("lavapipe"),
                 _ => None,
             };
-            link_lib64_beside_exe(lib64);
+            // The launcher directory is the parent of lib64: the SDK's `emulator/` or
+            // `<sdk>/emu-rs/renderer/<revision>/`; gfxstream finds `lib64/vulkan` and
+            // `lib64/gles_*` under it.
+            emu_gfxstream::link_beside_exe(lib64);
             emu_gfxstream::configure_environment(emulator_dir, icd);
         }
         let display = gpu_lib64.as_ref().map(|_| std::sync::Arc::new(emu_vmm::virtio::gpu::FrameStore::default()));
@@ -210,23 +221,6 @@ impl Instance {
             console,
         })
     }
-}
-
-/// gfxstream finds its Vulkan loader and ICD manifests under `<exe dir>/lib64/vulkan` (it
-/// rewrites `VK_ICD_FILENAMES` itself). In an SDK overlay that's already true; for a build in
-/// `target/` link the SDK's `lib64` next to the binary. Best effort: skipped if not writable.
-fn link_lib64_beside_exe(lib64: &std::path::Path) {
-    let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(std::path::Path::to_path_buf)) else { return };
-    let link = dir.join("lib64");
-    if link.symlink_metadata().is_err() {
-        let _ = std::os::unix::fs::symlink(lib64, &link);
-    }
-}
-
-/// The SDK's gfxstream renderer directory, if present.
-fn emu_gfxstream_lib64(sdk: &std::path::Path) -> Option<PathBuf> {
-    let p = sdk.join("emulator/lib64");
-    p.join("libgfxstream_backend.dylib").is_file().then_some(p)
 }
 
 /// First even console port whose console and adb ports are both free, like the stock emulator.

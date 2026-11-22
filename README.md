@@ -47,7 +47,7 @@ ignored for now.
 | `crates/emu-hvf` | Safe wrappers over Hypervisor.framework: VM, vCPUs, GIC, guest RAM with zero-copy file I/O. **The only crate with `unsafe`.** |
 | `crates/emu-vmm` | The machine: memory map (`layout.rs`), device tree (`board.rs`), vCPU loop and PSCI (`vcpu.rs`), MMIO bus, PL011/PL031, virtio-mmio transport, blk, rng, vsock, host pipe services (adb bridge, `qemud:boot-properties`) |
 | `crates/emu-avd` | AVD discovery and config (`~/.android/avd`, `config.ini`, system image), bootconfig encoding |
-| `crates/emu-sdk` | Java-free SDK provisioning: repository manifests, verified downloads, unpacking (`emu -provision`) |
+| `crates/emu-sdk` | Java-free SDK provisioning: repository manifests, verified downloads, unpacking, the on-demand renderer (`emu -provision`, `-provision-renderer`) |
 | `crates/emu-ext4` | Native ext4 formatter for first-boot userdata: writes only metadata, so a fresh 10 GiB image takes under 1 MB on disk |
 | `crates/emu-fdt` | Flattened device tree writer |
 | `apps/emu` | The `emu` CLI: SDK-emulator-compatible flags, per-AVD instance state, console server |
@@ -74,15 +74,18 @@ the VMM: no userspace GIC, fewer device threads, and RAM that is only committed 
 
 ## Provisioning without Java
 
-emu-rs needs only a system image and platform-tools (adb); the stock emulator package, Java,
-sdkmanager, avdmanager, Python and e2fsprogs aren't required (userdata is formatted natively by
-`crates/emu-ext4`). The `emu` binary provisions the rest itself:
+emu-rs needs a system image, platform-tools (adb) and, for graphics, the gfxstream renderer.
+Java, sdkmanager, avdmanager, Python, e2fsprogs and the full emulator package aren't required
+(userdata is formatted natively by `crates/emu-ext4`). The `emu` binary provisions the rest
+itself:
 
 ```bash
 emu -list-images -tag google_apis                       # stable arm64 images for this host
-emu -provision 36 -create-avd small36                   # platform-tools + google_apis image + AVD
+emu -provision 36 -create-avd small36                   # platform-tools + google_apis image + renderer + AVD
 emu -provision 35 -tag google_apis_playstore -create-avd play35 -lcd 480x800@240 -cores 2 -memory 1536
 emu -provision 36 -dry-run                              # resolve only: URL, size, sha1, install dir
+emu -provision 36 -no-renderer                          # skip the renderer (boots without graphics)
+emu -provision-renderer                                 # install or update just the renderer
 emu -create-avd NAME -sysdir system-images/android-36/google_apis/arm64-v8a -lcd 720x1280@320
 ```
 
@@ -93,10 +96,30 @@ checks size and sha1, unpacks it with `/usr/bin/unzip` and moves it into the sta
 Installed packages are skipped, manifests are cached for a day, and the archive is deleted once
 unpacked. The SDK is `$ANDROID_SDK_ROOT`/`$ANDROID_HOME`, else `~/Library/Android/sdk`.
 
+**The renderer** comes out of the SDK's `emulator` package, fetched on demand: the archive
+(420.6 MB for 37.3.10) is verified like any other, but only `emulator/lib64/**` minus
+`lib64/qt/**` (the stock window's Qt libraries) is unpacked, plus `LICENSE` and `NOTICE.txt`:
+498 MB on disk instead of the package's 1.32 GB. That keeps everything the renderer loads: the
+backend and its `@rpath` libraries, the shader translator it opens by name, `gles_angle`, and
+the Vulkan loader, ICDs (MoltenVK, lavapipe with its LLVM, SwiftShader) and validation layers.
+It goes to `$ANDROID_HOME/emu-rs/renderer/<revision>/` (with a `renderer.properties` marker
+recording revision and sha1, and a `current` symlink to the newest), never `emulator/`, so
+sdkmanager's own package tracking is never confused. `-provision` installs it unless the SDK
+already has a renderer; `-provision-renderer` updates to the newest stable revision and removes
+older ones.
+
+At boot emu uses the SDK's own `emulator/lib64` when present, else the newest
+`emu-rs/renderer/*/lib64`, and points gfxstream's launcher directory at its parent (where it
+finds `lib64/vulkan` and `lib64/gles_*`). `emu-gfxstream` preloads the backend's `@rpath`
+dependencies leaves-first from that directory, so they resolve without any rpath; libraries
+gfxstream `dlopen`s by bare name resolve through the binary's rpaths (`@executable_path/lib64`,
+which emu links to the chosen `lib64`, then the build machine's `emulator/lib64` and
+`emu-rs/renderer/current/lib64`). To check an install without a VM:
+`cargo run -p emu-gfxstream --example renderer_caps -- <lib64> moltenvk` prints capsets 3, 8, 9.
+
 AVD defaults favour cheap, fast boots: 720×1280 screen, 2 GB RAM, 4 vCPU, 4 GB data.
 Benchmarks of the stock emulator found that smaller screens boot markedly faster and that RAM
-above 2 GB slows cold boots down. Without the emulator package there's no bundled `mkfs.ext4`
-for first-boot userdata, so install e2fsprogs (`brew install e2fsprogs`).
+above 2 GB slows cold boots down.
 
 ## Performance notes
 

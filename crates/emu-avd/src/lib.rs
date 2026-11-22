@@ -97,7 +97,8 @@ pub struct Avd {
     pub dir: PathBuf,
     pub config: BTreeMap<String, String>,
     pub sysdir: PathBuf,
-    /// The SDK the image came from (holds the gfxstream renderer in `emulator/lib64`).
+    /// The SDK the image came from (holds the gfxstream renderer in `emulator/lib64` or
+    /// `emu-rs/renderer/<revision>/lib64`).
     pub sdk_root: Option<PathBuf>,
 }
 

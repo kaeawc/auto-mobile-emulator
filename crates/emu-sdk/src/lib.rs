@@ -4,10 +4,14 @@
 //! downloaded with macOS's own `/usr/bin/curl` (resumable, into `<sdk>/.downloads`), checked
 //! against the manifest's size and sha1, unpacked with `/usr/bin/unzip` into a temporary
 //! directory under the SDK and renamed into the standard layout. Shelling out to the system's
-//! curl and unzip keeps a TLS stack and a zip implementation out of the binary.
+//! curl and unzip keeps a TLS stack and a zip implementation out of the binary. The host
+//! renderer is unpacked out of the `emulator` package the same way, into emu-rs's own directory
+//! (see [`renderer`]).
 
 mod manifest;
+pub mod renderer;
 
+use std::ffi::OsString;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -56,6 +60,8 @@ pub enum Error {
     Verify { path: PathBuf, what: &'static str, expected: String, got: String },
     #[error("{0}: expected exactly one top-level directory in the archive, found {1} entries")]
     Layout(PathBuf, usize),
+    #[error("{0}: no emulator/lib64/{1} in the archive")]
+    NoRenderer(PathBuf, &'static str),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -88,6 +94,17 @@ pub fn format_size(bytes: u64) -> String {
     const MB: f64 = 1e6;
     let b = bytes as f64;
     if b >= 1e9 { format!("{:.2} GB", b / 1e9) } else { format!("{:.1} MB", b / MB) }
+}
+
+/// Moves the unpacked directory `src` to `dest`, replacing whatever is there.
+fn replace_dir(src: &Path, dest: &Path) -> Result<()> {
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent).map_err(io(parent))?;
+    }
+    if dest.symlink_metadata().is_ok() {
+        std::fs::remove_dir_all(dest).map_err(io(dest))?;
+    }
+    std::fs::rename(src, dest).map_err(io(dest))
 }
 
 /// A directory removed on drop.
@@ -191,6 +208,67 @@ impl Sdk {
     /// into `d.install_dir()`. Returns the installed directory. Replaces any incomplete install
     /// already there; callers skip installed packages with [`Sdk::is_installed`].
     pub fn install(&self, d: &Download) -> Result<PathBuf> {
+        let part = self.fetch_verified(d)?;
+        let tmp = self.unpack(d, false, |dest| vec!["-q".into(), part.clone().into(), "-d".into(), dest.into()])?;
+        let entries: Vec<PathBuf> = std::fs::read_dir(&tmp.0)
+            .map_err(io(&tmp.0))?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.file_name().is_some_and(|n| n != "__MACOSX"))
+            .collect();
+        let top = match entries.as_slice() {
+            [one] if one.is_dir() => one.clone(),
+            _ => return Err(Error::Layout(part, entries.len())),
+        };
+        if !top.join("source.properties").is_file() {
+            self.say(&format!("warning: {} has no source.properties", d.file_name()));
+        }
+
+        let dest = self.root.join(d.install_dir());
+        replace_dir(&top, &dest)?;
+        // The unpacked package is the cache; a system image archive is close to 2 GB.
+        let _ = std::fs::remove_file(&part);
+        Ok(dest)
+    }
+
+    /// Downloads the `emulator` package `d` and unpacks only the renderer
+    /// ([`renderer::INCLUDE`] minus [`renderer::EXCLUDE`]) into
+    /// `<sdk>/emu-rs/renderer/<revision>` with a [`renderer::MARKER`], points
+    /// [`renderer::CURRENT`] at it and removes older revisions. The archive is deleted.
+    pub fn install_renderer(&self, d: &Download) -> Result<renderer::Installed> {
+        let part = self.fetch_verified(d)?;
+        // LICENSE or NOTICE.txt may be missing from some revision; the backend may not.
+        let tmp = self.unpack(d, true, |dest| renderer::unzip_args(&part, dest))?;
+        let top = tmp.0.join("emulator");
+        if !top.join("lib64").join(renderer::BACKEND).is_file() {
+            let _ = std::fs::remove_file(&part);
+            return Err(Error::NoRenderer(part, renderer::BACKEND));
+        }
+        let marker = renderer::Marker { revision: d.revision, sha1: d.sha1.clone(), url: d.url.clone() };
+        let m = top.join(renderer::MARKER);
+        std::fs::write(&m, marker.to_string()).map_err(io(&m))?;
+
+        let dest = renderer::dir(&self.root, d.revision);
+        replace_dir(&top, &dest)?;
+        let _ = std::fs::remove_file(&part);
+
+        // Repoint `current` atomically, then drop superseded revisions (a running emu keeps the
+        // libraries it has already mapped).
+        let root = renderer::root(&self.root);
+        let current = root.join(renderer::CURRENT);
+        let link = root.join(format!(".{}.tmp", renderer::CURRENT));
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(d.revision.to_string(), &link).map_err(io(&link))?;
+        std::fs::rename(&link, &current).map_err(io(&current))?;
+        for old in renderer::installed(&self.root).into_iter().filter(|i| i.dir != dest) {
+            self.say(&format!("removing renderer r{}", old.marker.revision));
+            let _ = std::fs::remove_dir_all(&old.dir);
+        }
+        Ok(renderer::Installed { dir: dest, marker })
+    }
+
+    /// Downloads `d` into the download cache (resuming a partial download) and verifies its size
+    /// and sha1. Returns the archive's path; a bad archive is deleted.
+    fn fetch_verified(&self, d: &Download) -> Result<PathBuf> {
         let dl = self.downloads();
         std::fs::create_dir_all(&dl).map_err(io(&dl))?;
         let part = dl.join(format!("{}.part", d.file_name()));
@@ -207,39 +285,22 @@ impl Sdk {
             let _ = std::fs::remove_file(&part);
             return Err(Error::Verify { path: part, what: "sha1", expected: d.sha1.clone(), got: sha });
         }
+        Ok(part)
+    }
 
+    /// Runs unzip with the arguments `args` builds for a fresh temporary directory under the
+    /// download cache, and returns that directory. Exit status 11 (a pattern matched nothing) is
+    /// accepted when `allow_unmatched`; the caller then checks for the files it needs.
+    fn unpack(&self, d: &Download, allow_unmatched: bool, args: impl FnOnce(&Path) -> Vec<OsString>) -> Result<TempDir> {
         self.say(&format!("unpacking {}", d.file_name()));
         let nanos = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|t| t.subsec_nanos()).unwrap_or(0);
-        let tmp = TempDir(dl.join(format!("unpack-{}-{nanos}", std::process::id())));
+        let tmp = TempDir(self.downloads().join(format!("unpack-{}-{nanos}", std::process::id())));
         std::fs::create_dir_all(&tmp.0).map_err(io(&tmp.0))?;
-        let status = self.run(Command::new(&self.unzip).arg("-q").arg(&part).arg("-d").arg(&tmp.0))?;
-        if !status.success() {
-            return Err(Error::Command(format!("unzip {} failed ({status})", part.display())));
+        let status = self.run(Command::new(&self.unzip).args(args(&tmp.0)))?;
+        if !status.success() && !(allow_unmatched && status.code() == Some(11)) {
+            return Err(Error::Command(format!("unzip of {} failed ({status})", d.file_name())));
         }
-        let entries: Vec<PathBuf> = std::fs::read_dir(&tmp.0)
-            .map_err(io(&tmp.0))?
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.file_name().is_some_and(|n| n != "__MACOSX"))
-            .collect();
-        let top = match entries.as_slice() {
-            [one] if one.is_dir() => one.clone(),
-            _ => return Err(Error::Layout(part, entries.len())),
-        };
-        if !top.join("source.properties").is_file() {
-            self.say(&format!("warning: {} has no source.properties", d.file_name()));
-        }
-
-        let dest = self.root.join(d.install_dir());
-        if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent).map_err(io(parent))?;
-        }
-        if dest.exists() {
-            std::fs::remove_dir_all(&dest).map_err(io(&dest))?;
-        }
-        std::fs::rename(&top, &dest).map_err(io(&dest))?;
-        // The unpacked package is the cache; a system image archive is close to 2 GB.
-        let _ = std::fs::remove_file(&part);
-        Ok(dest)
+        Ok(tmp)
     }
 
     fn fetch_archive(&self, d: &Download, part: &Path) -> Result<()> {

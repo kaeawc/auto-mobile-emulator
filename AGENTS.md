@@ -42,7 +42,11 @@ check `adb -s emulator-5554 shell getprop sys.boot_completed`.
   vsock), `pipe/` (adb bridge, qemud services), `disk.rs`, `boot.rs`.
 - `crates/emu-avd` — `Env` (SDK/AVD paths), `Avd`, `BootConfig`, ini parsing.
 - `crates/emu-sdk` — Java-free provisioning: `manifest.rs` (repository XML, stable/host
-  resolution), `Sdk` (cached manifests, curl download, sha1 verify, unzip into place).
+  resolution), `Sdk` (cached manifests, curl download, sha1 verify, unzip into place),
+  `renderer.rs` (gfxstream `lib64` out of the emulator package into `<sdk>/emu-rs/renderer/`,
+  and the boot-time lookup).
+- `crates/emu-gfxstream` — `stream_renderer_*` FFI; `Renderer::load` preloads the backend's
+  `@rpath` deps (`macho.rs`); `examples/renderer_caps.rs` checks a renderer without a VM.
 - `crates/emu-ext4` — `format` (sparse, metadata-only ext4 for userdata), `Superblock::read`;
   `tests/e2fsck.rs` checks images with the SDK's (and Homebrew's) e2fsck.
 - `apps/emu` — `args.rs` (SDK emulator flags), `instance.rs` (disks, bootconfig, boot props),

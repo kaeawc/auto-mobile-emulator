@@ -6,11 +6,17 @@ usage: emu -avd NAME [options]
        emu @NAME [options]
        emu -list-avds | -version | -accel-check
        emu -create-avd NAME -sysdir system-images/android-36/google_apis/arm64-v8a [-lcd 720x1280@320] [-cores N] [-memory MB]
-       emu -provision API [-tag google_apis] [-abi arm64-v8a] [-dry-run] [-create-avd NAME [-lcd WxH@DPI] [-cores N] [-memory MB]]
+       emu -provision API [-tag google_apis] [-abi arm64-v8a] [-no-renderer] [-dry-run] [-create-avd NAME [-lcd WxH@DPI] [-cores N] [-memory MB]]
+       emu -provision-renderer [-dry-run]
        emu -list-images [-tag TAG] [-abi arm64-v8a]
 
 provisioning (no Java or sdkmanager; SDK at $ANDROID_HOME, default ~/Library/Android/sdk):
-  -provision API    install platform-tools and system-images;android-API;TAG;ABI (API: 36, 36.1, ...)
+  -provision API    install platform-tools, system-images;android-API;TAG;ABI (API: 36, 36.1, ...)
+                    and the gfxstream renderer (unless the SDK already has one)
+  -provision-renderer
+                    install or update just the renderer: lib64 of the emulator package, into
+                    $ANDROID_HOME/emu-rs/renderer/<revision>
+  -no-renderer      with -provision: skip the renderer (emu then boots without graphics)
   -tag TAG          default, google_apis (default), google_apis_playstore, android-wear, ...
   -abi ABI          default arm64-v8a
   -dry-run          resolve and print URL, size and sha1 without downloading
@@ -101,8 +107,12 @@ pub struct Opts {
     pub sysdir: Option<String>,
     /// WxH@DPI
     pub lcd: Option<(u32, u32, u32)>,
-    /// `-provision API`: install platform-tools and a system image.
+    /// `-provision API`: install platform-tools, a system image and the renderer.
     pub provision: Option<String>,
+    /// `-provision-renderer`: install or update only the gfxstream renderer.
+    pub provision_renderer: bool,
+    /// `-no-renderer`: `-provision` without the renderer.
+    pub no_renderer: bool,
     pub list_images: bool,
     pub tag: Option<String>,
     pub abi: Option<String>,
@@ -150,6 +160,8 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts> {
             "sysdir" => o.sysdir = Some(value(flag)?),
             "lcd" => o.lcd = Some(parse_lcd(&value(flag)?)?),
             "provision" => o.provision = Some(value(flag)?),
+            "provision-renderer" => o.provision_renderer = true,
+            "no-renderer" => o.no_renderer = true,
             "list-images" => o.list_images = true,
             "tag" => o.tag = Some(value(flag)?),
             "abi" => o.abi = Some(value(flag)?),
@@ -219,6 +231,12 @@ mod tests {
         assert_eq!(o.create_avd.as_deref(), Some("play36"));
         assert_eq!((o.lcd, o.cores, o.memory_mb), (Some((480, 800, 240)), Some(2), Some(1536)));
         assert!(o.dry_run && !o.list_images && o.ignored.is_empty());
+        assert!(!o.no_renderer && !o.provision_renderer);
+
+        let o = p("-provision 36 -no-renderer");
+        assert!(o.no_renderer && !o.provision_renderer && o.ignored.is_empty());
+        let o = p("-provision-renderer -dry-run");
+        assert!(o.provision_renderer && o.dry_run && o.provision.is_none() && o.ignored.is_empty());
 
         let o = p("-list-images -tag android-tv");
         assert!(o.list_images && o.provision.is_none());

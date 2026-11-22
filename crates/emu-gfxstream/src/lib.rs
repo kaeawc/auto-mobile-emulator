@@ -523,6 +523,15 @@ pub fn configure_environment(emulator_dir: &Path, icd: Icd) {
         vars.push(("VK_ICD_FILENAMES", manifest.into_os_string()));
     }
     vars.push(("ANDROID_EMU_VK_ICD", icd.name().into()));
+    // Host GLES through ANGLE (Metal) instead of the deprecated desktop GL, which lacks GLSL ES 3.
+    vars.push(("ANDROID_EGL_ON_EGL", "1".into()));
+    if icd == Icd::MoltenVk {
+        // What gfxstream configures for MoltenVK: its compositor shaders fail to convert with
+        // Metal argument buffers on.
+        vars.push(("MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS", "0".into()));
+        vars.push(("MVK_CONFIG_VK_SEMAPHORE_SUPPORT_STYLE", "0".into()));
+        vars.push(("MVK_CONFIG_USE_MTLHEAP", "1".into()));
+    }
     for (k, v) in vars {
         if std::env::var_os(k).is_none() {
             // SAFETY: documented precondition: called while the process is single-threaded

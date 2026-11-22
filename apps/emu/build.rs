@@ -11,9 +11,13 @@ fn main() {
         return;
     }
     println!("cargo:rustc-link-arg-bins=-Wl,-rpath,@executable_path/lib64");
+    // Host GLES is ANGLE on Metal; gfxstream dlopens libEGL/libGLESv2 by bare name.
+    println!("cargo:rustc-link-arg-bins=-Wl,-rpath,@executable_path/lib64/gles_angle");
     let sdk = std::env::var("ANDROID_SDK_ROOT")
         .or_else(|_| std::env::var("ANDROID_HOME"))
         .unwrap_or_else(|_| format!("{}/Library/Android/sdk", std::env::var("HOME").unwrap_or_default()));
     println!("cargo:rustc-link-arg-bins=-Wl,-rpath,{sdk}/emulator/lib64");
     println!("cargo:rustc-link-arg-bins=-Wl,-rpath,{sdk}/emu-rs/renderer/current/lib64");
+    println!("cargo:rustc-link-arg-bins=-Wl,-rpath,{sdk}/emulator/lib64/gles_angle");
+    println!("cargo:rustc-link-arg-bins=-Wl,-rpath,{sdk}/emu-rs/renderer/current/lib64/gles_angle");
 }

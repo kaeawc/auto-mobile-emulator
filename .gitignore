@@ -1,0 +1,7 @@
+/target
+/desktop/target
+.env
+junit.xml
+*.png
+!docs/**/*.png
+/bench

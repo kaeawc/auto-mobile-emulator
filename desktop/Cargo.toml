@@ -1,0 +1,56 @@
+[package]
+name = "emu-desktop"
+description = "Rune desktop app for emu-rs: AVD list, start/stop, live console."
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "MIT"
+publish = false
+
+# A workspace of its own: Rune is a ~170 MB git dependency with a GPU stack. Keeping it out of the
+# root workspace means `cargo check`/`test` at the root never fetch, resolve, or feature-unify it.
+[workspace]
+
+[dependencies]
+emu-avd = { path = "../crates/emu-avd" }
+rune = { git = "https://github.com/anomalyco/rune", rev = "7a707454fbfb8d3fd200723c65778fb7b98fd31e" }
+
+[features]
+# Live Rust editing through Rune's devserver (`scripts/rune-dev` in the Rune repo).
+hot = ["rune/hot"]
+
+# Rune doesn't propagate its patches; apps must repeat them at the same rev (Rune README,
+# "Depending on Rune"). Bump all of these together with `rune` above.
+[patch.crates-io]
+winit = { git = "https://github.com/anomalyco/rune", rev = "7a707454fbfb8d3fd200723c65778fb7b98fd31e" }
+sctk-adwaita = { git = "https://github.com/anomalyco/rune", rev = "7a707454fbfb8d3fd200723c65778fb7b98fd31e" }
+parley_engine = { git = "https://github.com/anomalyco/rune", rev = "7a707454fbfb8d3fd200723c65778fb7b98fd31e" }
+wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "7a707454fbfb8d3fd200723c65778fb7b98fd31e" }
+accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "7a707454fbfb8d3fd200723c65778fb7b98fd31e" }
+accesskit_macos = { git = "https://github.com/anomalyco/rune", rev = "7a707454fbfb8d3fd200723c65778fb7b98fd31e" }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[profile.dev]
+debug = "line-tables-only"
+
+# Dependencies (Rune's renderer, text shaping, wgpu) build once and are cached; optimizing them
+# keeps a debug window smooth without slowing the edit→run loop of this crate.
+[profile.dev.package."*"]
+debug = false
+opt-level = 2
+
+[profile.release]
+codegen-units = 16
+incremental = true
+
+[profile.rune-hot]
+inherits = "dev"
+debug = 0
+incremental = true
+
+[profile.ci]
+inherits = "dev"
+debug = false
+incremental = false

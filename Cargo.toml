@@ -1,0 +1,71 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/emu"]
+# The Rune desktop app is its own workspace: it pulls a ~170 MB git dependency and a GPU stack.
+# Keeping it out means `cargo check`/`test` here never fetch, resolve or feature-unify it.
+exclude = ["desktop"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "MIT"
+publish = false
+
+# Every crate inherits deps from here, so each dependency is built with one feature set no matter
+# which `-p` subset you build.
+[workspace.dependencies]
+emu-avd = { path = "crates/emu-avd" }
+emu-fdt = { path = "crates/emu-fdt" }
+emu-hvf = { path = "crates/emu-hvf" }
+emu-vmm = { path = "crates/emu-vmm" }
+
+anyhow = "1"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+libc = { version = "0.2", default-features = false }
+# Safe syscall wrappers (plain fsync: std's sync_data is F_FULLFSYNC on macOS).
+rustix = { version = "1", default-features = false, features = ["fs", "std"] }
+thiserror = "2"
+
+# unsafe is denied everywhere except emu-hvf, the one crate that talks to Hypervisor.framework
+# and owns guest memory. Everything above it is safe Rust.
+[workspace.lints.rust]
+unsafe_code = "deny"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "warn"
+unwrap_used = "warn"
+
+[profile.dev]
+debug = "line-tables-only"
+# The device model sits on the guest's hot path (every MMIO exit, every block request); an
+# unoptimized VMM makes the guest boot several times slower.
+opt-level = 1
+
+[profile.dev.package."*"]
+debug = false
+opt-level = 2
+
+[profile.dev.build-override]
+opt-level = 0
+debug = false
+
+[profile.release]
+codegen-units = 16
+incremental = true
+strip = "debuginfo"
+
+# What ships: slowest to build, smallest and fastest binary.
+[profile.dist]
+inherits = "release"
+codegen-units = 1
+incremental = false
+lto = "thin"
+strip = true
+
+[profile.ci]
+inherits = "dev"
+debug = false
+incremental = false

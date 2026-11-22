@@ -1,0 +1,184 @@
+//! The SDK emulator's command line: single-dash long flags, some taking a value.
+use anyhow::{Result, bail};
+
+pub const USAGE: &str = "\
+usage: emu -avd NAME [options]
+       emu @NAME [options]
+       emu -list-avds | -version | -accel-check
+       emu -create-avd NAME -sysdir system-images/android-36/google_apis/arm64-v8a [-lcd 720x1280@320] [-cores N] [-memory MB]
+
+options:
+  -cores N          vCPUs (default: hw.cpu.ncore)
+  -memory MB        guest RAM (default: hw.ramSize)
+  -port N           console port; adb uses N+1
+  -read-only        keep every disk write in memory (several instances per AVD)
+  -wipe-data        reset user data before booting
+  -show-kernel      print the guest console
+  -verbose          diagnostics, including vCPU exit counts at shutdown
+  -no-boot-anim     skip the boot animation
+Other SDK emulator flags are accepted.
+";
+
+/// Flags that take a value and that we don't act on (yet).
+const IGNORED_WITH_VALUE: &[&str] = &[
+    "ports",
+    "gpu",
+    "grpc",
+    "camera-back",
+    "camera-front",
+    "packet-streamer-endpoint",
+    "feature",
+    "virtualscene-poster",
+    "skin",
+    "skindir",
+    "netdelay",
+    "netspeed",
+    "dns-server",
+    "http-proxy",
+    "timezone",
+    "logcat",
+    "shell-serial",
+    "prop",
+    "datadir",
+    "sdcard",
+    "partition-size",
+    "snapshot",
+    "id",
+    "accel",
+    "selinux",
+    "audio",
+    "screen",
+    "grpc-use-token",
+    "grpc-use-jwt",
+    "metrics-collection",
+    "metrics-to-file",
+    "idle-grpc-timeout",
+    "allow-host-audio",
+    "radio",
+    "encryption-key",
+    "cache",
+    "cache-size",
+    "logcat-output",
+    "kernel",
+    "ramdisk",
+    "system",
+    "vendor",
+    "data",
+    "initdata",
+];
+
+#[derive(Debug, Default)]
+pub struct Opts {
+    pub avd: Option<String>,
+    pub list_avds: bool,
+    pub version: bool,
+    pub help: bool,
+    pub accel_check: bool,
+    pub cores: Option<u32>,
+    pub memory_mb: Option<u64>,
+    pub port: Option<u16>,
+    pub read_only: bool,
+    pub wipe_data: bool,
+    pub show_kernel: bool,
+    pub verbose: bool,
+    pub no_boot_anim: bool,
+    pub no_window: bool,
+    pub create_avd: Option<String>,
+    pub sysdir: Option<String>,
+    /// WxH@DPI
+    pub lcd: Option<(u32, u32, u32)>,
+    /// Flags accepted for compatibility but not implemented.
+    pub ignored: Vec<String>,
+}
+
+pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts> {
+    let mut o = Opts::default();
+    let mut it = args.into_iter();
+    while let Some(arg) = it.next() {
+        if let Some(name) = arg.strip_prefix('@') {
+            o.avd = Some(name.to_string());
+            continue;
+        }
+        let Some(flag) = arg.strip_prefix("--").or_else(|| arg.strip_prefix('-')) else {
+            bail!("unexpected argument '{arg}'");
+        };
+        let mut value = |flag: &str| it.next().ok_or_else(|| anyhow::anyhow!("-{flag} needs a value"));
+        match flag {
+            "avd" => o.avd = Some(value(flag)?),
+            "list-avds" => o.list_avds = true,
+            "version" => o.version = true,
+            "help" | "h" => o.help = true,
+            "accel-check" => o.accel_check = true,
+            "cores" => o.cores = Some(value(flag)?.parse()?),
+            "memory" => o.memory_mb = Some(value(flag)?.parse()?),
+            "port" => o.port = Some(value(flag)?.parse()?),
+            "read-only" => o.read_only = true,
+            "wipe-data" => o.wipe_data = true,
+            "show-kernel" => o.show_kernel = true,
+            "verbose" | "debug-init" => o.verbose = true,
+            "no-boot-anim" => o.no_boot_anim = true,
+            "no-window" => o.no_window = true,
+            "create-avd" => o.create_avd = Some(value(flag)?),
+            "sysdir" => o.sysdir = Some(value(flag)?),
+            "lcd" => o.lcd = Some(parse_lcd(&value(flag)?)?),
+            // Everything after -qemu belongs to QEMU, which we aren't.
+            "qemu" => {
+                let rest: Vec<String> = it.by_ref().collect();
+                o.ignored.push(format!("-qemu {}", rest.join(" ")));
+            }
+            f if IGNORED_WITH_VALUE.contains(&f) => {
+                let v = value(f)?;
+                o.ignored.push(format!("-{f} {v}"));
+            }
+            f => o.ignored.push(format!("-{f}")),
+        }
+    }
+    Ok(o)
+}
+
+fn parse_lcd(v: &str) -> Result<(u32, u32, u32)> {
+    let (size, dpi) = v.split_once('@').unwrap_or((v, "320"));
+    let (w, h) = size.split_once('x').ok_or_else(|| anyhow::anyhow!("-lcd wants WxH@DPI, got '{v}'"))?;
+    Ok((w.parse()?, h.parse()?, dpi.parse()?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn p(s: &str) -> Opts {
+        parse(s.split_whitespace().map(String::from)).expect("parse")
+    }
+
+    #[test]
+    fn harness_launch_line() {
+        let o = p("-avd pixel -no-window -no-audio -no-snapshot-save -gpu swiftshader_indirect -grpc 8554 -port 5570 -no-boot-anim");
+        assert_eq!(o.avd.as_deref(), Some("pixel"));
+        assert_eq!(o.port, Some(5570));
+        assert!(o.no_window && o.no_boot_anim);
+        assert!(o.ignored.iter().any(|i| i == "-gpu swiftshader_indirect"));
+        assert!(o.ignored.iter().any(|i| i == "-grpc 8554"));
+    }
+
+    #[test]
+    fn at_name_and_qemu_tail() {
+        let o = p("@pixel -cores 2 -qemu -m 2048 -smp 2");
+        assert_eq!(o.avd.as_deref(), Some("pixel"));
+        assert_eq!(o.cores, Some(2));
+        assert_eq!(o.ignored, vec!["-qemu -m 2048 -smp 2".to_string()]);
+    }
+
+    #[test]
+    fn create_avd_flags() {
+        let o = p("-create-avd small -sysdir system-images/android-36/google_apis/arm64-v8a -lcd 480x800@240 -cores 2");
+        assert_eq!(o.create_avd.as_deref(), Some("small"));
+        assert_eq!(o.lcd, Some((480, 800, 240)));
+        assert!(parse_lcd("480").is_err());
+    }
+
+    #[test]
+    fn missing_value_is_an_error() {
+        assert!(parse(["-port".to_string()]).is_err());
+        assert!(parse(["stray".to_string()]).is_err());
+    }
+}

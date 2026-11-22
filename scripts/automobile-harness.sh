@@ -7,6 +7,7 @@
 #   scripts/automobile-harness.sh @<avd> [auto-mobile checkout]          # AutoMobile boots it (via `make shim`)
 #
 # The checkout defaults to ../auto-mobile and runs from source (bun src/index.ts).
+# HARNESS_ONLY=<regex> limits the run to matching tool lines.
 set -euo pipefail
 target=${1:?usage: scripts/automobile-harness.sh <emulator-PORT|@avd> [auto-mobile checkout]}
 repo=$(cd "$(dirname "$0")/.." && pwd)
@@ -100,6 +101,8 @@ tools=(
 pass=0; fail=0
 printf 'tool\tresult\n' > "$root/coverage.tsv"
 for line in "${tools[@]}"; do
+  # HARNESS_ONLY=<regex> runs just the matching tools.
+  if [ -n "${HARNESS_ONLY:-}" ] && ! [[ "$line" =~ $HARNESS_ONLY ]]; then continue; fi
   read -r -a argv <<< "$line"
   if out=$(am --session-uuid "$session" "${argv[@]}" 2>&1); then
     result=pass; pass=$((pass + 1))

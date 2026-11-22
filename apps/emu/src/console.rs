@@ -392,6 +392,8 @@ fn session(stream: TcpStream, info: &ConsoleInfo) -> std::io::Result<()> {
             ("geo", true) => geo(info, &words[1..]),
             ("power", true) => power(info, &words[1..]),
             ("sms", true) => sms(info, &words[1..]),
+                None => "KO: dir".into(),
+            },
             ("gsm", true) => gsm(info, &words[1..]),
             // Stock: rotate the device 90° clockwise. Gravity in device coordinates turns the
             // other way, and the guest's auto-rotation follows the accelerometer.

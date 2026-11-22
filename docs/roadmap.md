@@ -62,6 +62,17 @@ possible, plus input. virtio-input (touch, keyboard, rotary) and the PL061 power
 same milestone. Done when `sys.boot_completed=1` and `pm list packages` answers, which is
 AutoMobile's readiness check.
 
+## Snapshots — blocked on the renderer
+
+AutoMobile's `deviceSnapshot` drives `avd snapshot save|load`. RAM, vCPU (including the GIC
+state the framework exposes), device and disk state (APFS clones) are ours to write; the GPU is
+not. The SDK's renderer refuses `stream_renderer_snapshot` ("Snapshot save requested without
+support": built without the snapshot frontend), its internal `RendererImpl::save` needs C++
+`Stream`/`ITextureSaver` objects and misses the virtio-gpu frontend's state, and current images
+ship no guest software renderer to fall back to. Options: build gfxstream with snapshot support
+(the frontend snapshot is meant for all-Vulkan guests, which emu-rs now runs via guest ANGLE), or
+report snapshots as unsupported so tools fall back to app-level state.
+
 ## 3. AutoMobile harness parity
 
 Point AutoMobile at emu-rs through the SDK overlay (`make shim`, `ANDROID_HOME=~/.emu-rs/sdk`)

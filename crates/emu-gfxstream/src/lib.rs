@@ -147,6 +147,10 @@ struct Api {
     resource_unmap: unsafe extern "C" fn(u32) -> c_int,
     resource_map_info: unsafe extern "C" fn(u32, *mut u32) -> c_int,
     create_fence: unsafe extern "C" fn(*const Fence) -> c_int,
+    suspend: unsafe extern "C" fn() -> c_int,
+    snapshot: unsafe extern "C" fn(*const c_char) -> c_int,
+    restore: unsafe extern "C" fn(*const c_char) -> c_int,
+    resume: unsafe extern "C" fn() -> c_int,
 }
 
 fn dlerror() -> String {
@@ -201,6 +205,10 @@ impl Api {
             resource_unmap: sym!(h, "stream_renderer_resource_unmap"),
             resource_map_info: sym!(h, "stream_renderer_resource_map_info"),
             create_fence: sym!(h, "stream_renderer_create_fence"),
+            suspend: sym!(h, "stream_renderer_suspend"),
+            snapshot: sym!(h, "stream_renderer_snapshot"),
+            restore: sym!(h, "stream_renderer_restore"),
+            resume: sym!(h, "stream_renderer_resume"),
         })
     }
 }
@@ -480,6 +488,31 @@ impl Renderer {
     pub fn create_fence(&self, f: Fence) -> Result<()> {
         // SAFETY: the fence lives for the call.
         ok("create_fence", unsafe { (self.api.create_fence)(&f) })
+    }
+
+    /// Stops renderer work ahead of a snapshot (the guest must be paused).
+    pub fn suspend(&self) -> Result<()> {
+        // SAFETY: no arguments.
+        ok("suspend", unsafe { (self.api.suspend)() })
+    }
+
+    /// Writes the renderer's state into directory `dir`.
+    pub fn snapshot(&self, dir: &Path) -> Result<()> {
+        let c = CString::new(dir.as_os_str().as_encoded_bytes()).map_err(|_| Error::Call("snapshot", -22))?;
+        // SAFETY: NUL-terminated path valid for the call.
+        ok("snapshot", unsafe { (self.api.snapshot)(c.as_ptr()) })
+    }
+
+    /// Loads the renderer's state from `dir` (before the guest runs).
+    pub fn restore(&self, dir: &Path) -> Result<()> {
+        let c = CString::new(dir.as_os_str().as_encoded_bytes()).map_err(|_| Error::Call("restore", -22))?;
+        // SAFETY: NUL-terminated path valid for the call.
+        ok("restore", unsafe { (self.api.restore)(c.as_ptr()) })
+    }
+
+    pub fn resume(&self) -> Result<()> {
+        // SAFETY: no arguments.
+        ok("resume", unsafe { (self.api.resume)() })
     }
 }
 

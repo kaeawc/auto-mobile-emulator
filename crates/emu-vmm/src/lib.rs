@@ -46,6 +46,28 @@ pub struct DiskSpec {
     pub serial: String,
 }
 
+/// Host GPU rendering through gfxstream.
+pub struct GpuSpec {
+    /// The SDK's `emulator/lib64` (holds `libgfxstream_backend.dylib`).
+    pub lib64: PathBuf,
+    pub width: u32,
+    pub height: u32,
+    pub verbose: bool,
+    pub display: Arc<dyn virtio::gpu::DisplaySink>,
+}
+
+/// The renderer is process-wide: loaded and initialized once, reused across guest reboots.
+fn renderer(spec: &GpuSpec) -> Result<Arc<emu_gfxstream::Renderer>> {
+    static RENDERER: std::sync::OnceLock<Arc<emu_gfxstream::Renderer>> = std::sync::OnceLock::new();
+    if let Some(r) = RENDERER.get() {
+        return Ok(r.clone());
+    }
+    let r = emu_gfxstream::Renderer::load(&spec.lib64).context("loading the gfxstream renderer")?;
+    let flags = emu_gfxstream::flags::USE_GLES | emu_gfxstream::flags::USE_VK;
+    r.init(spec.width, spec.height, flags, spec.verbose, virtio::gpu::fence_handler()).context("initializing the gfxstream renderer")?;
+    Ok(RENDERER.get_or_init(|| Arc::new(r)).clone())
+}
+
 pub struct MachineConfig {
     pub cpus: u32,
     pub ram_bytes: u64,
@@ -57,6 +79,7 @@ pub struct MachineConfig {
     pub rng: bool,
     /// Host TCP port bridged to the guest's adbd (stock: console port + 1).
     pub adb_port: Option<u16>,
+    pub gpu: Option<GpuSpec>,
     /// Served to the guest's `qemu-props` over the `qemud:boot-properties` pipe.
     pub boot_props: Vec<(String, String)>,
     /// Where guest console (PL011) output goes.
@@ -153,6 +176,16 @@ pub fn run(cfg: MachineConfig, stop: Arc<AtomicBool>) -> Result<Outcome> {
     }
     if cfg.rng {
         slots[slots::RNG as usize] = Some(Box::new(virtio::rng::Rng::new()));
+    }
+    if let Some(spec) = &cfg.gpu {
+        let gpu = virtio::gpu::Gpu::new(virtio::gpu::GpuConfig {
+            width: spec.width,
+            height: spec.height,
+            renderer: renderer(spec)?,
+            shm: (GPU_SHM_BASE, GPU_SHM_SIZE),
+            display: spec.display.clone(),
+        });
+        slots[slots::GPU as usize] = Some(Box::new(gpu));
     }
     if let Some(port) = cfg.adb_port {
         let (events, rx) = virtio::vsock::event_channel();

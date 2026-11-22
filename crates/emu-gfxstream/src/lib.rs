@@ -430,6 +430,29 @@ fn on_debug_ptr() -> u64 {
     on_debug as DebugCb as usize as u64
 }
 
+/// Points the renderer at the SDK's Vulkan loader and ICDs (MoltenVK by default). gfxstream
+/// resolves `lib64/vulkan/*` relative to its "launcher directory", which defaults to the
+/// executable's directory; set it to the SDK's `emulator/`.
+///
+/// Call before spawning threads that might read the environment.
+pub fn configure_environment(emulator_dir: &Path, icd: Option<&str>) {
+    let loader = emulator_dir.join("lib64/vulkan/libvulkan.dylib");
+    let mut vars = vec![("ANDROID_EMULATOR_LAUNCHER_DIR", emulator_dir.as_os_str().to_owned())];
+    if loader.is_file() {
+        vars.push(("ANDROID_EMU_VK_LOADER_PATH", loader.into_os_string()));
+    }
+    if let Some(icd) = icd {
+        vars.push(("ANDROID_EMU_VK_ICD", icd.into()));
+    }
+    for (k, v) in vars {
+        if std::env::var_os(k).is_none() {
+            // SAFETY: documented precondition: called while the process is single-threaded
+            // with respect to environment access.
+            unsafe { std::env::set_var(k, v) };
+        }
+    }
+}
+
 /// A renderer mapping widened to `len` bytes (whole guest pages). Renderer allocations are
 /// page-aligned and page-granular, so the extra tail is part of the same allocation.
 pub fn page_range(host: HostRange, len: usize) -> HostRange {

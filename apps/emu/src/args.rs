@@ -31,7 +31,6 @@ Other SDK emulator flags are accepted.
 /// Flags that take a value and that we don't act on (yet).
 const IGNORED_WITH_VALUE: &[&str] = &[
     "ports",
-    "gpu",
     "grpc",
     "camera-back",
     "camera-front",
@@ -92,6 +91,8 @@ pub struct Opts {
     pub verbose: bool,
     pub no_boot_anim: bool,
     pub no_window: bool,
+    /// `-gpu MODE`: `off`/`none` disables host rendering; anything else uses gfxstream.
+    pub gpu: Option<String>,
     pub create_avd: Option<String>,
     pub sysdir: Option<String>,
     /// WxH@DPI
@@ -133,6 +134,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts> {
             "verbose" | "debug-init" => o.verbose = true,
             "no-boot-anim" => o.no_boot_anim = true,
             "no-window" => o.no_window = true,
+            "gpu" => o.gpu = Some(value(flag)?),
             "create-avd" => o.create_avd = Some(value(flag)?),
             "sysdir" => o.sysdir = Some(value(flag)?),
             "lcd" => o.lcd = Some(parse_lcd(&value(flag)?)?),
@@ -176,7 +178,7 @@ mod tests {
         assert_eq!(o.avd.as_deref(), Some("pixel"));
         assert_eq!(o.port, Some(5570));
         assert!(o.no_window && o.no_boot_anim);
-        assert!(o.ignored.iter().any(|i| i == "-gpu swiftshader_indirect"));
+        assert_eq!(o.gpu.as_deref(), Some("swiftshader_indirect"));
         assert!(o.ignored.iter().any(|i| i == "-grpc 8554"));
     }
 

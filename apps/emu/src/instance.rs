@@ -25,6 +25,9 @@ pub struct Instance {
     read_only: bool,
     /// Console port (the `emulator-<port>` serial); adb listens on port + 1.
     pub console_port: u16,
+    /// Latest guest frame, when host rendering is on.
+    pub display: Option<std::sync::Arc<emu_vmm::virtio::gpu::FrameStore>>,
+    gpu_lib64: Option<PathBuf>,
     _lock: Option<File>,
 }
 
@@ -74,7 +77,23 @@ impl Instance {
             Some(p) => p,
             None => free_port_pair().context("no free console/adb port pair in 5554..5682")?,
         };
-        Ok(Instance { avd: avd.clone(), dir, read_only: opts.read_only, console_port, _lock: lock })
+        let gpu_off = matches!(opts.gpu.as_deref(), Some("off" | "none"));
+        let gpu_lib64 = if gpu_off { None } else { avd.sdk_root.as_deref().and_then(emu_gfxstream_lib64) };
+        if gpu_lib64.is_none() && !gpu_off {
+            eprintln!("emu: no gfxstream renderer in the SDK (emulator/lib64); booting without graphics");
+        }
+        if let Some(lib64) = &gpu_lib64
+            && let Some(emulator_dir) = lib64.parent()
+        {
+            let icd = match opts.gpu.as_deref() {
+                Some("swiftshader" | "swiftshader_indirect") => Some("swiftshader"),
+                Some("lavapipe") => Some("lavapipe"),
+                _ => None,
+            };
+            emu_gfxstream::configure_environment(emulator_dir, icd);
+        }
+        let display = gpu_lib64.as_ref().map(|_| std::sync::Arc::new(emu_vmm::virtio::gpu::FrameStore::default()));
+        Ok(Instance { avd: avd.clone(), dir, read_only: opts.read_only, console_port, display, gpu_lib64, _lock: lock })
     }
 
     fn bootconfig(&self, opts: &Opts) -> BootConfig {
@@ -92,6 +111,11 @@ impl Instance {
             .set("androidboot.qemu.vsync", "60")
             .set("androidboot.qemu.settings.system.screen_off_timeout", "2147483647")
             .set("androidboot.opengles.version", "196609");
+        if self.gpu_lib64.is_some() {
+            // gfxstream over virtio-gpu: GLES through the pipe stream, Vulkan and ANGLE through
+            // address-space graphics, both on the host renderer.
+            bc.set("androidboot.hardware.gltransport", "virtio-gpu-asg").set("androidboot.hardware.vulkan", "ranchu");
+        }
         if opts.no_boot_anim {
             bc.set("androidboot.debug.sf.nobootanimation", "1");
         }
@@ -157,10 +181,23 @@ impl Instance {
             disks,
             rng: true,
             adb_port: Some(self.console_port + 1),
+            gpu: self.gpu_lib64.as_ref().zip(self.display.as_ref()).map(|(lib64, display)| emu_vmm::GpuSpec {
+                lib64: lib64.clone(),
+                width: self.avd.lcd().0,
+                height: self.avd.lcd().1,
+                verbose: opts.verbose,
+                display: display.clone(),
+            }),
             boot_props: self.boot_props(),
             console,
         })
     }
+}
+
+/// The SDK's gfxstream renderer directory, if present.
+fn emu_gfxstream_lib64(sdk: &std::path::Path) -> Option<PathBuf> {
+    let p = sdk.join("emulator/lib64");
+    p.join("libgfxstream_backend.dylib").is_file().then_some(p)
 }
 
 /// First even console port whose console and adb ports are both free, like the stock emulator.

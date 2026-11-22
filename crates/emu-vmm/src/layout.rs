@@ -32,6 +32,11 @@ pub const KERNEL_ADDR: u64 = RAM_BASE + 0x20_0000;
 /// Initrd, far enough above the kernel for its image, BSS and early page tables.
 pub const INITRD_ADDR: u64 = RAM_BASE + 0x0800_0000;
 
+/// Host-visible GPU memory (virtio-gpu shared memory region 1): blobs the guest maps get
+/// mapped here, above RAM, inside a 36-bit guest physical address space.
+pub const GPU_SHM_BASE: u64 = 0x8_0000_0000;
+pub const GPU_SHM_SIZE: u64 = 8 << 30;
+
 /// Converts an SPI number (as written in the device tree) to a GIC interrupt ID.
 pub const fn spi_intid(spi: u32) -> u32 {
     32 + spi
@@ -43,6 +48,8 @@ pub fn virtio_slot_addr(slot: u32) -> u64 {
 
 /// Stock slot assignment (from a running stock emulator's `/proc/iomem` and `/sys/block`).
 pub mod slots {
+    /// virtio-gpu (stock uses goldfish pipe + address space instead).
+    pub const GPU: u32 = 23;
     /// Not on the stock board (which puts vsock on PCI); the guest driver doesn't care.
     pub const VSOCK: u32 = 24;
     pub const RNG: u32 = 25;

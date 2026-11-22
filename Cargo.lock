@@ -41,6 +41,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "emu-avd",
+ "emu-gfxstream",
  "emu-sdk",
  "emu-vmm",
  "libc",

@@ -56,9 +56,10 @@ and run its tools one by one, fixing whatever breaks:
   near-instant.
 - virtio-balloon free-page reporting, so idle guests hand memory back to the host.
 - `DISCARD`/`WRITE_ZEROES` with `F_PUNCHHOLE`, keeping userdata sparse.
-- Native ext4 formatter, removing the dependency on the SDK's `mkfs.ext4`. This matters for the
-  Java-free path (`scripts/provision.sh`), which installs no emulator package and so has no
-  bundled `mkfs.ext4`; until then it needs e2fsprogs.
+- ~~Native ext4 formatter, removing the dependency on the SDK's `mkfs.ext4`.~~ Done
+  (`crates/emu-ext4`): first-boot userdata no longer needs the emulator package or e2fsprogs,
+  so the Java-free path (`scripts/provision.sh`) is complete. Checked with e2fsck 1.42 (SDK)
+  and 1.46 (in the guest, at boot), and vold encrypts it in place.
 - `emu provision` in Rust, replacing `scripts/provision.sh` + `sdk-resolve.py`: manifest
   resolution, verified download, unzip, AVD creation in one binary.
 - qcow2 read/write, to share AVD state with the stock emulator.

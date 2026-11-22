@@ -41,6 +41,8 @@ check `adb -s emulator-5554 shell getprop sys.boot_completed`.
   wakers), `bus.rs`, `devices/` (PL011, PL031), `virtio/` (mmio transport, queue, blk, rng,
   vsock), `pipe/` (adb bridge, qemud services), `disk.rs`, `boot.rs`.
 - `crates/emu-avd` — `Env` (SDK/AVD paths), `Avd`, `BootConfig`, ini parsing.
+- `crates/emu-ext4` — `format` (sparse, metadata-only ext4 for userdata), `Superblock::read`;
+  `tests/e2fsck.rs` checks images with the SDK's (and Homebrew's) e2fsck.
 - `apps/emu` — `args.rs` (SDK emulator flags), `instance.rs` (disks, bootconfig, boot props),
   `console.rs` (console server, running-instance file).
 - `desktop/` — Rune app: `backend.rs`, `view.rs`, `main.rs` (state, actions, poll, tests).

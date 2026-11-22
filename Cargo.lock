@@ -41,6 +41,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "emu-avd",
+ "emu-ext4",
  "emu-vmm",
  "libc",
 ]
@@ -51,6 +52,10 @@ version = "0.1.0"
 dependencies = [
  "thiserror",
 ]
+
+[[package]]
+name = "emu-ext4"
+version = "0.1.0"
 
 [[package]]
 name = "emu-fdt"

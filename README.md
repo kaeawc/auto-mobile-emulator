@@ -13,7 +13,7 @@ to use fewer resources.
 | --- | --- |
 | VM core | vCPUs, the framework's in-kernel GICv3, PSCI (SMP, power off and reset), arch timer, PL011 console, PL031 RTC |
 | Board | Stock memory map and virtio-mmio slots, so the unmodified fstab and first-stage init find `vda`–`vde` and their by-name paths |
-| Storage | virtio-blk with indirect descriptors and event-idx. System and vendor are copy-on-write in memory; userdata, cache and metadata persist per AVD |
+| Storage | virtio-blk with indirect descriptors and event-idx. System and vendor are copy-on-write in memory; userdata, cache and metadata persist per AVD. Userdata is created by a native ext4 formatter (no `mkfs.ext4`) |
 | Boot | Kernel, first-stage init, dm-linear `super`, second-stage init, metadata encryption of `/data`, APEX activation, adbd |
 | adb | virtio-vsock with a host bridge on `console port + 1`, announced to the adb server. `adb shell`/`root`/`push` work, and the device shows up about 8 s after launch on a warm boot |
 | Console | `adb emu` / telnet console with token auth: `avd name`, `ping`, `kill` |
@@ -47,6 +47,7 @@ ignored for now.
 | `crates/emu-hvf` | Safe wrappers over Hypervisor.framework: VM, vCPUs, GIC, guest RAM with zero-copy file I/O. **The only crate with `unsafe`.** |
 | `crates/emu-vmm` | The machine: memory map (`layout.rs`), device tree (`board.rs`), vCPU loop and PSCI (`vcpu.rs`), MMIO bus, PL011/PL031, virtio-mmio transport, blk, rng, vsock, host pipe services (adb bridge, `qemud:boot-properties`) |
 | `crates/emu-avd` | AVD discovery and config (`~/.android/avd`, `config.ini`, system image), bootconfig encoding |
+| `crates/emu-ext4` | Native ext4 formatter for first-boot userdata: writes only metadata, so a fresh 10 GiB image takes under 1 MB on disk |
 | `crates/emu-fdt` | Flattened device tree writer |
 | `apps/emu` | The `emu` CLI: SDK-emulator-compatible flags, per-AVD instance state, console server |
 | `desktop/` | Rune desktop app, its own workspace |
@@ -73,7 +74,8 @@ the VMM: no userspace GIC, fewer device threads, and RAM that is only committed 
 ## Provisioning without Java
 
 emu-rs needs only a system image and platform-tools (adb); the stock emulator package, Java,
-sdkmanager and avdmanager aren't required.
+sdkmanager, avdmanager and e2fsprogs aren't required (userdata is formatted natively by
+`crates/emu-ext4`).
 
 ```bash
 scripts/provision.sh 36 google_apis small36    # resolve, verify (size + sha1), unpack, create the AVD

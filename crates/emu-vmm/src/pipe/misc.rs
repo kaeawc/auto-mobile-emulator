@@ -49,6 +49,29 @@ impl PipeHandler for MiscPipe {
     }
 }
 
+/// Accepts a pipe and never sends anything: for guest services that must open their pipe but
+/// only hear from the host on events emu-rs doesn't generate (e.g. `multidisplay`, whose JNI
+/// crashes on a refused open; with one display the host has nothing to say).
+pub struct Silent(pub &'static str);
+
+impl PipeService for Silent {
+    fn open(&self, name: &str, _ctx: PipeCtx) -> Option<Box<dyn PipeHandler>> {
+        (name == self.0).then(|| Box::new(Quiet) as _)
+    }
+}
+
+struct Quiet;
+
+impl PipeHandler for Quiet {
+    fn guest_data(&mut self, _data: &[u8], _to_guest: &mut Vec<u8>) -> bool {
+        true
+    }
+
+    fn host_msg(&mut self, msg: HostMsg, _to_guest: &mut Vec<u8>) -> bool {
+        !matches!(msg, HostMsg::Close)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

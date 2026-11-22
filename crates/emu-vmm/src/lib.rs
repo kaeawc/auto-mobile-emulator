@@ -145,6 +145,7 @@ pub fn run(cfg: MachineConfig, stop: Arc<AtomicBool>) -> Result<Outcome> {
         cmdline: &cfg.cmdline,
         initrd,
         virtio_slots: VIRTIO_MMIO_SLOTS,
+        pci: cfg.gpu.is_some(),
         rng_seed: random_bytes(),
         kaslr_seed: u64::from_le_bytes(random_bytes()),
     })?;
@@ -162,6 +163,25 @@ pub fn run(cfg: MachineConfig, stop: Arc<AtomicBool>) -> Result<Outcome> {
     let spi = |n: u32| -> Arc<dyn IrqLine> { Arc::new(GicSpi::new(spi_intid(n), wake.clone())) };
 
     let mut bus = Bus::new();
+    // Goldfish address space (the ranchu gralloc's host memory) on a PCIe host, with graphics.
+    let mut as_area = None;
+    if cfg.gpu.is_some() {
+        let area = Arc::new(GuestRam::new(GOLDFISH_AS_AREA, GOLDFISH_AS_AREA_SIZE)?);
+        vm.map_ram(&area)?;
+        use devices::pci::{Bar, BarKind, PciFunction};
+        let host = devices::pci::PciHost::new(vec![PciFunction {
+            vendor: devices::goldfish_as::VENDOR,
+            device: devices::goldfish_as::DEVICE,
+            class: 0x05_00_00,
+            bars: vec![
+                (0, Bar { kind: BarKind::Mem32, addr: GOLDFISH_AS_REGS, size: 0x1000 }),
+                (1, Bar { kind: BarKind::Mem64Prefetch, addr: GOLDFISH_AS_AREA, size: GOLDFISH_AS_AREA_SIZE }),
+            ],
+        }]);
+        bus.insert(PCI_ECAM_BASE, PCI_ECAM_SIZE, host);
+        bus.insert(GOLDFISH_AS_REGS, 0x1000, Arc::new(devices::goldfish_as::GoldfishAddressSpace::new(mem.clone(), area.clone())));
+        as_area = Some(area);
+    }
     bus.insert(UART_BASE, PERIPH_SIZE, Arc::new(devices::pl011::Pl011::new(spi(UART_SPI), cfg.console)));
     bus.insert(RTC_BASE, PERIPH_SIZE, Arc::new(devices::pl031::Pl031::default()));
     let mut slots: Vec<Option<Box<dyn virtio::VirtioDevice>>> = (0..VIRTIO_MMIO_SLOTS).map(|_| None).collect();
@@ -227,6 +247,7 @@ pub fn run(cfg: MachineConfig, stop: Arc<AtomicBool>) -> Result<Outcome> {
     // Devices (and their worker threads) go first, then the VM, then guest RAM.
     drop(cpus);
     drop(vm);
+    drop(as_area);
     drop(mem);
     Ok(Outcome { reason, uptime: started.elapsed(), exits })
 }

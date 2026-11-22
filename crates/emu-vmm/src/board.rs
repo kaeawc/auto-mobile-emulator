@@ -12,6 +12,8 @@ pub struct BoardInfo<'a> {
     pub initrd: Option<(u64, u64)>,
     /// Slots that hold a device; the rest are still described (and answer as empty), like stock.
     pub virtio_slots: u32,
+    /// Describe the PCIe host (goldfish address space lives there).
+    pub pci: bool,
     pub rng_seed: [u8; 64],
     pub kaslr_seed: u64,
 }
@@ -116,7 +118,45 @@ pub fn build(b: &BoardInfo) -> Result<Vec<u8>, emu_fdt::FdtError> {
         f.end_node();
     }
 
+    if b.pci {
+        f.begin_node(&format!("pcie@{PCI_MMIO32_BASE:x}"));
+        f.prop_str("compatible", "pci-host-ecam-generic");
+        f.prop_str("device_type", "pci");
+        f.prop_u32("#address-cells", 3);
+        f.prop_u32("#size-cells", 2);
+        f.prop_reg("reg", &[(PCI_ECAM_BASE, PCI_ECAM_SIZE)]);
+        f.prop_cells("bus-range", &[0, 0]);
+        f.prop_u32("linux,pci-domain", 0);
+        let hi = |v: u64| (v >> 32) as u32;
+        let lo = |v: u64| v as u32;
+        f.prop_cells(
+            "ranges",
+            &[
+                0x0200_0000,
+                hi(PCI_MMIO32_BASE),
+                lo(PCI_MMIO32_BASE),
+                hi(PCI_MMIO32_BASE),
+                lo(PCI_MMIO32_BASE),
+                hi(PCI_MMIO32_SIZE),
+                lo(PCI_MMIO32_SIZE),
+                0x4300_0000,
+                hi(PCI_MMIO64_BASE),
+                lo(PCI_MMIO64_BASE),
+                hi(PCI_MMIO64_BASE),
+                lo(PCI_MMIO64_BASE),
+                hi(PCI_MMIO64_SIZE),
+                lo(PCI_MMIO64_SIZE),
+            ],
+        );
+        f.prop_empty("dma-coherent");
+        f.end_node();
+    }
+
     f.begin_node("chosen");
+    if b.pci {
+        // Keep our BAR assignments (BAR1 is backed by host memory mapped at a fixed address).
+        f.prop_u32("linux,pci-probe-only", 1);
+    }
     f.prop_str("bootargs", b.cmdline);
     f.prop_str("stdout-path", &format!("/pl011@{UART_BASE:x}"));
     if let Some((start, end)) = b.initrd {
@@ -153,6 +193,7 @@ mod tests {
             cmdline: "console=ttyAMA0",
             initrd: Some((INITRD_ADDR, INITRD_ADDR + 100)),
             virtio_slots: VIRTIO_MMIO_SLOTS,
+            pci: true,
             rng_seed: [0; 64],
             kaslr_seed: 1,
         })
@@ -161,5 +202,6 @@ mod tests {
         let text = String::from_utf8_lossy(&dtb);
         assert!(text.contains("virtio_mmio@a003600"));
         assert!(text.contains("arm,gic-v3"));
+        assert!(text.contains("pci-host-ecam-generic"));
     }
 }

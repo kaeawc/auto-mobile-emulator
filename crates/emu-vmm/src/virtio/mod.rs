@@ -1,6 +1,7 @@
 //! virtio devices over the MMIO transport.
 pub mod blk;
 pub mod gpu;
+pub mod input;
 pub mod mmio;
 pub mod queue;
 pub mod rng;

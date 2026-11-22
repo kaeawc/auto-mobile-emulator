@@ -34,8 +34,20 @@ pub const INITRD_ADDR: u64 = RAM_BASE + 0x0800_0000;
 
 /// Host-visible GPU memory (virtio-gpu shared memory region 1): blobs the guest maps get
 /// mapped here, above RAM, inside a 36-bit guest physical address space.
-pub const GPU_SHM_BASE: u64 = 0x8_0000_0000;
+pub const GPU_SHM_BASE: u64 = 0xc_0000_0000;
 pub const GPU_SHM_SIZE: u64 = 8 << 30;
+
+/// PCIe (ECAM) host, like stock: config space, a 32-bit MMIO window and a 64-bit window.
+pub const PCI_ECAM_BASE: u64 = 0x3f00_0000;
+pub const PCI_ECAM_SIZE: u64 = 0x0100_0000;
+pub const PCI_MMIO32_BASE: u64 = 0x1000_0000;
+pub const PCI_MMIO32_SIZE: u64 = 0x2eff_0000;
+pub const PCI_MMIO64_BASE: u64 = 0x8_0000_0000;
+pub const PCI_MMIO64_SIZE: u64 = 0x4_0000_0000;
+/// Goldfish address space: control registers (BAR0) and host-memory area (BAR1, 16 GiB).
+pub const GOLDFISH_AS_REGS: u64 = PCI_MMIO32_BASE;
+pub const GOLDFISH_AS_AREA: u64 = PCI_MMIO64_BASE;
+pub const GOLDFISH_AS_AREA_SIZE: u64 = 16 << 30;
 
 /// Converts an SPI number (as written in the device tree) to a GIC interrupt ID.
 pub const fn spi_intid(spi: u32) -> u32 {

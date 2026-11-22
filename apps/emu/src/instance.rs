@@ -37,6 +37,7 @@ pub struct Instance {
     pub fingerprint: std::sync::Arc<emu_vmm::pipe::fingerprint::Fingerprint>,
     pub gps: std::sync::Arc<emu_vmm::pipe::gps::Gps>,
     pub battery: std::sync::Arc<emu_vmm::devices::goldfish_battery::Battery>,
+    pub telephony: std::sync::Arc<emu_vmm::telephony::Telephony>,
     _lock: Option<File>,
 }
 
@@ -132,6 +133,7 @@ impl Instance {
             fingerprint: Default::default(),
             gps: Default::default(),
             battery: Default::default(),
+            telephony: Default::default(),
             _lock: lock,
         })
     }
@@ -242,6 +244,7 @@ impl Instance {
             fingerprint: self.fingerprint.clone(),
             gps: self.gps.clone(),
             battery: self.battery.clone(),
+            telephony: self.telephony.clone(),
             on_guest_event: {
                 let started = std::time::Instant::now();
                 Some(std::sync::Arc::new(move |event: &str| {

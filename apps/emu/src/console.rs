@@ -19,6 +19,7 @@ pub struct ConsoleInfo {
     pub fingerprint: Arc<emu_vmm::pipe::fingerprint::Fingerprint>,
     pub gps: Arc<emu_vmm::pipe::gps::Gps>,
     pub battery: Arc<emu_vmm::devices::goldfish_battery::Battery>,
+    pub telephony: Arc<emu_vmm::telephony::Telephony>,
 }
 
 /// `sensor set <name> <v[:v...]>` / `sensor get <name>` (stock syntax).
@@ -223,6 +224,69 @@ fn power(info: &ConsoleInfo, words: &[&str]) -> String {
     }
 }
 
+/// `sms send <phonenumber> <message>` delivers an SMS to the guest (stock syntax); `sms list`
+/// (emu-rs) shows what the guest sent.
+fn sms(info: &ConsoleInfo, words: &[&str]) -> String {
+    match words {
+        ["send", from, text @ ..] if !text.is_empty() => match info.telephony.sms_deliver(from, &text.join(" ")) {
+            Ok(()) => "OK".into(),
+            Err(e) => format!("KO: {e}"),
+        },
+        ["list"] => {
+            let mut s: String = info.telephony.sent_sms().iter().map(|(to, text)| format!("to {to}: {text}\r\n")).collect();
+            s.push_str("OK");
+            s
+        }
+        _ => "KO: Usage: sms send <phonenumber> <message>".into(),
+    }
+}
+
+/// `gsm call|accept|busy|cancel|hold <number>`, `gsm list`, `gsm voice|data <state>`,
+/// `gsm status`, `gsm signal <rssi> [<ber>]` (stock syntax).
+fn gsm(info: &ConsoleInfo, words: &[&str]) -> String {
+    use emu_vmm::modem::RegState;
+    use emu_vmm::telephony::CallOp;
+    let t = &info.telephony;
+    let op = |op: CallOp, n: &str| match t.call(op, n) {
+        Ok(()) => "OK".to_string(),
+        Err(e) => format!("KO: {e}"),
+    };
+    match words {
+        ["call", n] => op(CallOp::Incoming, n),
+        ["accept", n] => op(CallOp::Accept, n),
+        ["busy", n] => op(CallOp::Busy, n),
+        ["cancel", n] => op(CallOp::Cancel, n),
+        ["hold", n] => op(CallOp::Hold, n),
+        ["list"] => {
+            let mut s: String = t.list_calls().iter().map(|l| format!("{l}\r\n")).collect();
+            s.push_str("OK");
+            s
+        }
+        [which @ ("voice" | "data"), state] => match RegState::from_name(state) {
+            Some(st) => {
+                if *which == "voice" { t.set_voice(st) } else { t.set_data(st) }
+                "OK".into()
+            }
+            None => "KO: bad state, use unregistered|home|roaming|searching|denied|off|on".into(),
+        },
+        ["status"] => {
+            let (v, d) = t.states();
+            format!("gsm voice state: {}\r\ngsm data state:  {}\r\nOK", v.name(), d.name())
+        }
+        ["signal", rssi, rest @ ..] if rest.len() <= 1 => {
+            let ber = rest.first().map_or(Ok(99), |b| b.parse::<u8>());
+            match (rssi.parse::<u8>(), ber) {
+                (Ok(r), Ok(b)) if (r <= 31 || r == 99) && (b <= 7 || b == 99) => {
+                    t.set_signal(r, b);
+                    "OK".into()
+                }
+                _ => "KO: rssi 0..31 (or 99), ber 0..7 (or 99)".into(),
+            }
+        }
+        _ => "KO: Usage: gsm call|accept|busy|cancel|hold <number> | list | voice|data <state> | status | signal <rssi> [<ber>]".into(),
+    }
+}
+
 /// Commands this console implements (stock names first, then emu-rs extensions).
 const HELP: &[(&str, &str)] = &[
     ("help|h|?", "print a list of commands"),
@@ -234,6 +298,8 @@ const HELP: &[(&str, &str)] = &[
     ("geo", "Geo-location commands"),
     ("power", "power related commands"),
     ("rotate", "rotate the screen clockwise by 90 degrees"),
+    ("sms", "SMS related commands"),
+    ("gsm", "GSM related commands"),
     ("ping", "check if the emulator is alive"),
     ("sensor", "manage emulator sensors"),
     ("screenshot", "take a screenshot of the display"),
@@ -325,6 +391,8 @@ fn session(stream: TcpStream, info: &ConsoleInfo) -> std::io::Result<()> {
             ("sensor", true) => sensor(info, &words[1..]),
             ("geo", true) => geo(info, &words[1..]),
             ("power", true) => power(info, &words[1..]),
+            ("sms", true) => sms(info, &words[1..]),
+            ("gsm", true) => gsm(info, &words[1..]),
             // Stock: rotate the device 90° clockwise. Gravity in device coordinates turns the
             // other way, and the guest's auto-rotation follows the accelerometer.
             ("rotate", true) => match info.sensors.get("acceleration").as_deref() {

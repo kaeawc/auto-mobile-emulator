@@ -175,6 +175,7 @@ fn real_main() -> Result<ExitCode> {
             fingerprint: inst.fingerprint.clone(),
             gps: inst.gps.clone(),
             battery: inst.battery.clone(),
+            telephony: inst.telephony.clone(),
         },
     )?;
     let _advert = console::Advertisement::write(&avd.name, &avd.dir, inst.console_port);

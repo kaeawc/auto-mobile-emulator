@@ -10,6 +10,7 @@ pub mod disk;
 pub mod irq;
 pub mod layout;
 pub mod modem;
+pub mod telephony;
 pub mod pipe;
 pub mod vcpu;
 pub mod virtio;
@@ -150,6 +151,8 @@ pub struct MachineConfig {
     pub gps: Arc<pipe::gps::Gps>,
     /// Battery and AC state (console `power`).
     pub battery: Arc<devices::goldfish_battery::Battery>,
+    /// The modem on the `modem` vport (console `sms`, `gsm`).
+    pub telephony: Arc<telephony::Telephony>,
     /// Touchscreen size; enables the virtio-input touchscreen, keyboard and rotary devices.
     pub input: Option<(u32, u32)>,
     /// Receives the input handles of this run (they change when the guest reboots).
@@ -274,6 +277,19 @@ pub fn run(cfg: MachineConfig, stop: Arc<AtomicBool>) -> Result<Outcome> {
         .with_context(|| format!("opening {}", d.path.display()))?;
         let slot = slots.get_mut(d.slot as usize).with_context(|| format!("virtio slot {} out of range", d.slot))?;
         *slot = Some(Box::new(virtio::blk::Blk::new(disk, d.serial.clone())));
+    }
+    {
+        // Port 0 is the console port; named ports follow (qemu-props publishes them as
+        // vendor.qemu.vport.<name>).
+        use virtio::console::{Console, PortSpec, Sink};
+        let (vcon, handles) = Console::new(vec![
+            PortSpec { name: String::new(), backend: Box::new(Sink) },
+            PortSpec { name: "modem".into(), backend: cfg.telephony.backend() },
+        ]);
+        if let Some(h) = handles.get(1) {
+            cfg.telephony.attach(h.clone());
+        }
+        slots[slots::VPORTS as usize] = Some(Box::new(vcon));
     }
     if cfg.rng {
         slots[slots::RNG as usize] = Some(Box::new(virtio::rng::Rng::new()));

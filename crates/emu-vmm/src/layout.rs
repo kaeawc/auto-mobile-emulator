@@ -77,6 +77,8 @@ pub mod slots {
     pub const VSOCK: u32 = 24;
     pub const RNG: u32 = 25;
     pub const NET: u32 = 26;
+    /// virtio-console with named ports (`modem`); stock puts its consoles on PCI.
+    pub const VPORTS: u32 = 19;
     /// vda: system.img (GPT: vbmeta, super). `androidboot.boot_devices` points here.
     pub const SYSTEM: u32 = 27;
     /// vdb: cache.img.

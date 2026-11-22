@@ -145,6 +145,8 @@ pub struct MachineConfig {
     pub clipboard: Arc<pipe::clipboard::Clipboard>,
     /// Fingerprint sensor events (console `finger touch|remove`).
     pub fingerprint: Arc<pipe::fingerprint::Fingerprint>,
+    /// GNSS position (console `geo fix`), streamed over `qemud:gps`.
+    pub gps: Arc<pipe::gps::Gps>,
     /// Touchscreen size; enables the virtio-input touchscreen, keyboard and rotary devices.
     pub input: Option<(u32, u32)>,
     /// Receives the input handles of this run (they change when the guest reboots).
@@ -322,6 +324,7 @@ pub fn run(cfg: MachineConfig, stop: Arc<AtomicBool>) -> Result<Outcome> {
         registry.register("qemud:sensors", Box::new(pipe::sensors::SensorService { sensors: cfg.sensors.clone() }));
         registry.register("clipboard", Box::new(pipe::clipboard::ClipboardService { clipboard: cfg.clipboard.clone() }));
         registry.register("qemud:fingerprintlisten", Box::new(pipe::fingerprint::FingerprintService { fingerprint: cfg.fingerprint.clone() }));
+        registry.register("qemud:gps", Box::new(pipe::gps::GpsService { gps: cfg.gps.clone() }));
         registry.register("qemud:camera", Box::new(pipe::fingerprint::CameraService));
         registry.register("GLProcessPipe", Box::new(devices::goldfish_pipe::GlProcess::default()));
         let registry = Arc::new(registry);

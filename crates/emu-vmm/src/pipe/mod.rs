@@ -6,6 +6,7 @@
 pub mod adb;
 pub mod clipboard;
 pub mod fingerprint;
+pub mod gps;
 pub mod misc;
 pub mod qemud;
 pub mod sensors;

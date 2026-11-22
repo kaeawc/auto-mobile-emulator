@@ -35,6 +35,7 @@ pub struct Instance {
     /// Guest clipboard, shared with the console.
     pub clipboard: std::sync::Arc<emu_vmm::pipe::clipboard::Clipboard>,
     pub fingerprint: std::sync::Arc<emu_vmm::pipe::fingerprint::Fingerprint>,
+    pub gps: std::sync::Arc<emu_vmm::pipe::gps::Gps>,
     _lock: Option<File>,
 }
 
@@ -128,6 +129,7 @@ impl Instance {
             sensors: Default::default(),
             clipboard: Default::default(),
             fingerprint: Default::default(),
+            gps: Default::default(),
             _lock: lock,
         })
     }
@@ -151,6 +153,11 @@ impl Instance {
             // gfxstream over virtio-gpu: GLES through the pipe stream, Vulkan and ANGLE through
             // address-space graphics, both on the host renderer.
             bc.set("androidboot.hardware.gltransport", "virtio-gpu-asg").set("androidboot.hardware.vulkan", "ranchu");
+            // EMU_GUEST_EGL=angle: guest GLES through ANGLE on the guest's Vulkan, so every
+            // context uses address-space graphics instead of the blocking pipe stream.
+            if let Ok(egl) = std::env::var("EMU_GUEST_EGL") {
+                bc.set("androidboot.hardwareegl", egl);
+            }
         }
         if opts.no_boot_anim {
             bc.set("androidboot.debug.sf.nobootanimation", "1");
@@ -230,6 +237,7 @@ impl Instance {
             sensors: self.sensors.clone(),
             clipboard: self.clipboard.clone(),
             fingerprint: self.fingerprint.clone(),
+            gps: self.gps.clone(),
             on_guest_event: {
                 let started = std::time::Instant::now();
                 Some(std::sync::Arc::new(move |event: &str| {

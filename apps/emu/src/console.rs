@@ -17,6 +17,7 @@ pub struct ConsoleInfo {
     pub sensors: Arc<emu_vmm::pipe::sensors::Sensors>,
     pub clipboard: Arc<emu_vmm::pipe::clipboard::Clipboard>,
     pub fingerprint: Arc<emu_vmm::pipe::fingerprint::Fingerprint>,
+    pub gps: Arc<emu_vmm::pipe::gps::Gps>,
 }
 
 /// `sensor set <name> <v[:v...]>` / `sensor get <name>` (stock syntax).
@@ -124,6 +125,28 @@ fn screenshot(info: &ConsoleInfo, path: Option<&str>) -> String {
     }
 }
 
+/// `geo fix <longitude> <latitude> [<altitude> [<satellites> [<velocity>]]]` (stock syntax;
+/// velocity in knots).
+fn geo(info: &ConsoleInfo, words: &[&str]) -> String {
+    let ["fix", rest @ ..] = words else { return "KO: usage: geo fix <longitude> <latitude> [<altitude> [<satellites> [<velocity>]]]".into() };
+    let nums: Result<Vec<f64>, _> = rest.iter().map(|w| w.parse::<f64>()).collect();
+    match nums.as_deref() {
+        Ok([lon, lat, more @ ..]) if more.len() <= 3 && (-180.0..=180.0).contains(lon) && (-90.0..=90.0).contains(lat) => {
+            let fix = emu_vmm::pipe::gps::Fix {
+                longitude: *lon,
+                latitude: *lat,
+                altitude: more.first().copied().unwrap_or(0.0),
+                satellites: more.get(1).map_or(8, |s| s.clamp(1.0, 12.0) as u32),
+                speed_knots: more.get(2).copied().unwrap_or(0.0),
+                course: 0.0,
+            };
+            info.gps.set_fix(fix);
+            "OK".into()
+        }
+        _ => "KO: bad geo fix arguments (longitude -180..180, latitude -90..90)".into(),
+    }
+}
+
 /// Commands this console implements (stock names first, then emu-rs extensions).
 const HELP: &[(&str, &str)] = &[
     ("help|h|?", "print a list of commands"),
@@ -132,6 +155,7 @@ const HELP: &[(&str, &str)] = &[
     ("event", "simulate hardware events"),
     ("avd", "control virtual device execution"),
     ("finger", "manage emulator fingerprint"),
+    ("geo", "Geo-location commands"),
     ("ping", "check if the emulator is alive"),
     ("sensor", "manage emulator sensors"),
     ("screenshot", "take a screenshot of the display"),
@@ -221,6 +245,7 @@ fn session(stream: TcpStream, info: &ConsoleInfo) -> std::io::Result<()> {
             ("screenshot", true) => screenshot(info, words.get(1).copied()),
             ("event", true) => event(info, &words[1..]),
             ("sensor", true) => sensor(info, &words[1..]),
+            ("geo", true) => geo(info, &words[1..]),
             ("finger", true) => match (words.get(1).copied(), words.get(2).and_then(|v| v.parse::<u32>().ok())) {
                 (Some("touch"), Some(id)) if id > 0 => {
                     info.fingerprint.touch(id);

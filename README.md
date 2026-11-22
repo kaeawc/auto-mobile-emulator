@@ -47,6 +47,7 @@ ignored for now.
 | `crates/emu-hvf` | Safe wrappers over Hypervisor.framework: VM, vCPUs, GIC, guest RAM with zero-copy file I/O. **The only crate with `unsafe`.** |
 | `crates/emu-vmm` | The machine: memory map (`layout.rs`), device tree (`board.rs`), vCPU loop and PSCI (`vcpu.rs`), MMIO bus, PL011/PL031, virtio-mmio transport, blk, rng, vsock, host pipe services (adb bridge, `qemud:boot-properties`) |
 | `crates/emu-avd` | AVD discovery and config (`~/.android/avd`, `config.ini`, system image), bootconfig encoding |
+| `crates/emu-sdk` | Java-free SDK provisioning: repository manifests, verified downloads, unpacking (`emu -provision`) |
 | `crates/emu-fdt` | Flattened device tree writer |
 | `apps/emu` | The `emu` CLI: SDK-emulator-compatible flags, per-AVD instance state, console server |
 | `desktop/` | Rune desktop app, its own workspace |
@@ -73,18 +74,27 @@ the VMM: no userspace GIC, fewer device threads, and RAM that is only committed 
 ## Provisioning without Java
 
 emu-rs needs only a system image and platform-tools (adb); the stock emulator package, Java,
-sdkmanager and avdmanager aren't required.
+sdkmanager, avdmanager and Python aren't required. The `emu` binary provisions them itself:
 
 ```bash
-scripts/provision.sh 36 google_apis small36    # resolve, verify (size + sha1), unpack, create the AVD
-LCD=480x800@240 CORES=2 scripts/provision.sh 35 google_apis tiny35
-cargo run -p emu -- -create-avd NAME -sysdir system-images/android-36/google_apis/arm64-v8a -lcd 720x1280@320
+emu -list-images -tag google_apis                       # stable arm64 images for this host
+emu -provision 36 -create-avd small36                   # platform-tools + google_apis image + AVD
+emu -provision 35 -tag google_apis_playstore -create-avd play35 -lcd 480x800@240 -cores 2 -memory 1536
+emu -provision 36 -dry-run                              # resolve only: URL, size, sha1, install dir
+emu -create-avd NAME -sysdir system-images/android-36/google_apis/arm64-v8a -lcd 720x1280@320
 ```
 
-`scripts/sdk-resolve.py` reads Google's repository manifests directly. AVD defaults favour
-cheap, fast boots: 720×1280 screen, 2 GB RAM, 4 vCPU, 4 GB data. Benchmarks of the stock
-emulator found that smaller screens boot markedly faster and that RAM above 2 GB slows cold
-boots down.
+`crates/emu-sdk` reads Google's repository manifests (`repository2-3.xml`, and
+`sys-img/<tag>/sys-img2-3.xml` per tag), picks the newest stable archive for macOS/arm64,
+downloads it with the system's `/usr/bin/curl` (resumable, into `$ANDROID_HOME/.downloads`),
+checks size and sha1, unpacks it with `/usr/bin/unzip` and moves it into the standard SDK layout.
+Installed packages are skipped, manifests are cached for a day, and the archive is deleted once
+unpacked. The SDK is `$ANDROID_SDK_ROOT`/`$ANDROID_HOME`, else `~/Library/Android/sdk`.
+
+AVD defaults favour cheap, fast boots: 720×1280 screen, 2 GB RAM, 4 vCPU, 4 GB data.
+Benchmarks of the stock emulator found that smaller screens boot markedly faster and that RAM
+above 2 GB slows cold boots down. Without the emulator package there's no bundled `mkfs.ext4`
+for first-boot userdata, so install e2fsprogs (`brew install e2fsprogs`).
 
 ## Performance notes
 

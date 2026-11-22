@@ -97,6 +97,7 @@ pub struct Avd {
     pub dir: PathBuf,
     pub config: BTreeMap<String, String>,
     pub sysdir: PathBuf,
+    /// The SDK the image came from (holds the gfxstream renderer in `emulator/lib64`).
     pub sdk_root: Option<PathBuf>,
 }
 
@@ -111,18 +112,6 @@ impl Avd {
             .find(|p| p.join("kernel-ranchu").is_file() || p.join("system.img").is_file())
             .ok_or_else(|| Error::Config(format!("{name}: no system image found (image.sysdir.N in config.ini, SDK root {sdk_root:?})")))?;
         Ok(Avd { name: name.to_string(), dir, config, sysdir, sdk_root: sdk_root.map(Path::to_path_buf) })
-    }
-
-    /// An ext4 formatter: the SDK's bundled `mkfs.ext4`, else one on PATH (e.g. e2fsprogs).
-    pub fn mkfs_ext4(&self) -> Option<PathBuf> {
-        let bundled = self.sdk_root.as_ref().map(|r| r.join("emulator/bin64/mkfs.ext4")).filter(|p| p.is_file());
-        bundled.or_else(|| {
-            let path = std::env::var_os("PATH")?;
-            std::env::split_paths(&path)
-                .flat_map(|d| [d.join("mkfs.ext4"), d.join("mke2fs")])
-                .chain(["/opt/homebrew/opt/e2fsprogs/sbin/mkfs.ext4".into(), "/usr/local/opt/e2fsprogs/sbin/mkfs.ext4".into()])
-                .find(|p| p.is_file())
-        })
     }
 
     pub fn get(&self, key: &str) -> Option<&str> {

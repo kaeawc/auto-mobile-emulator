@@ -58,9 +58,10 @@ and run its tools one by one, fixing whatever breaks:
   near-instant.
 - virtio-balloon free-page reporting, so idle guests hand memory back to the host.
 - `DISCARD`/`WRITE_ZEROES` with `F_PUNCHHOLE`, keeping userdata sparse.
-- Native ext4 formatter, removing the dependency on the SDK's `mkfs.ext4`. This matters for the
-  Java-free path (`emu -provision`), which installs no emulator package and so has no
-  bundled `mkfs.ext4`; until then it needs e2fsprogs.
+- ~~Native ext4 formatter, removing the dependency on the SDK's `mkfs.ext4`.~~ Done
+  (`crates/emu-ext4`): first-boot userdata needs neither the emulator package nor e2fsprogs,
+  so the Java-free path (`emu -provision`) is complete. Checked with e2fsck 1.42 (SDK) and
+  1.46 (in the guest, at boot); vold encrypts it in place.
 - qcow2 read/write, to share AVD state with the stock emulator.
 - Multi-instance density: shared read-only image pages and a smaller per-instance footprint.
 - Debugging tools in the desktop app: exit and IRQ counters, frame timing, guest console and

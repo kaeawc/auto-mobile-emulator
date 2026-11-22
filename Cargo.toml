@@ -17,6 +17,7 @@ publish = false
 [workspace.dependencies]
 emu-avd = { path = "crates/emu-avd" }
 emu-gfxstream = { path = "crates/emu-gfxstream" }
+emu-ext4 = { path = "crates/emu-ext4" }
 emu-fdt = { path = "crates/emu-fdt" }
 emu-hvf = { path = "crates/emu-hvf" }
 emu-sdk = { path = "crates/emu-sdk" }

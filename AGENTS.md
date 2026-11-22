@@ -43,6 +43,8 @@ check `adb -s emulator-5554 shell getprop sys.boot_completed`.
 - `crates/emu-avd` — `Env` (SDK/AVD paths), `Avd`, `BootConfig`, ini parsing.
 - `crates/emu-sdk` — Java-free provisioning: `manifest.rs` (repository XML, stable/host
   resolution), `Sdk` (cached manifests, curl download, sha1 verify, unzip into place).
+- `crates/emu-ext4` — `format` (sparse, metadata-only ext4 for userdata), `Superblock::read`;
+  `tests/e2fsck.rs` checks images with the SDK's (and Homebrew's) e2fsck.
 - `apps/emu` — `args.rs` (SDK emulator flags), `instance.rs` (disks, bootconfig, boot props),
   `console.rs` (console server, running-instance file), `provision.rs` (`-provision`,
   `-list-images`).

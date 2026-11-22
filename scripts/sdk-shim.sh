@@ -22,7 +22,8 @@ for entry in "$real"/*; do
     [ "$name" = emulator ] && continue
     ln -sfn "$entry" "$shim/$name"
 done
-# Keep the stock emulator's helper tools (mkfs.ext4 for fresh userdata images).
+# Keep the stock emulator's helper tools (e2fsck, resize2fs, ...) for tools that look for them;
+# emu-rs itself formats userdata natively and needs none of them.
 [ -d "$real/emulator/bin64" ] && ln -sfn "$real/emulator/bin64" "$shim/emulator/bin64"
 cp "$repo/target/release/emu" "$shim/emulator/emulator"
 codesign --sign - --force --entitlements "$repo/scripts/hypervisor.entitlements" "$shim/emulator/emulator"

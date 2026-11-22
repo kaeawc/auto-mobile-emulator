@@ -15,6 +15,7 @@ path = "src/main.rs"
 anyhow.workspace = true
 emu-avd.workspace = true
 emu-sdk.workspace = true
+emu-ext4.workspace = true
 emu-vmm.workspace = true
 emu-gfxstream.workspace = true
 libc.workspace = true

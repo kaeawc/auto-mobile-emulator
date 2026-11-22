@@ -48,6 +48,7 @@ dependencies = [
  "emu-vmm",
  "flate2",
  "libc",
+ "rustix",
 ]
 
 [[package]]

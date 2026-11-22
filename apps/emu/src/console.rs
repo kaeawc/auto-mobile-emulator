@@ -474,6 +474,7 @@ impl Advertisement {
         let base = std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Caches/TemporaryItems"))?;
         let dir = base.join("avd/running");
         std::fs::create_dir_all(&dir).ok()?;
+        prune_stale(&dir);
         let path = dir.join(format!("pid_{}.ini", std::process::id()));
         let cmdline: Vec<String> = std::env::args().collect();
         let body = format!(
@@ -484,6 +485,24 @@ impl Advertisement {
         );
         std::fs::write(&path, body).ok()?;
         Some(Advertisement { path })
+    }
+}
+
+/// Removes emu-rs advertisements whose process is gone (a teardown that hit the hard-exit
+/// timer skips the Drop below). Stale entries claim ports and confuse discovery tools.
+/// Stock emulator files are left alone.
+fn prune_stale(dir: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
+        let name = e.file_name();
+        let Some(pid) = name.to_str().and_then(|n| n.strip_prefix("pid_")?.strip_suffix(".ini")?.parse::<i32>().ok()) else {
+            continue;
+        };
+        let ours = std::fs::read_to_string(e.path()).is_ok_and(|t| t.lines().any(|l| l == "emulator=emu-rs"));
+        let alive = rustix::process::Pid::from_raw(pid).is_some_and(|p| rustix::process::test_kill_process(p).is_ok());
+        if ours && !alive {
+            let _ = std::fs::remove_file(e.path());
+        }
     }
 }
 

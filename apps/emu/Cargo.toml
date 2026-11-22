@@ -21,6 +21,7 @@ emu-gfxstream.workspace = true
 libc.workspace = true
 flate2.workspace = true
 crc32fast.workspace = true
+rustix.workspace = true
 
 [lints]
 workspace = true

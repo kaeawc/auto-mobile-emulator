@@ -6,17 +6,21 @@ use std::thread::JoinHandle;
 use emu_hvf::GuestRam;
 
 use super::mmio::{F_RING_EVENT_IDX, F_RING_INDIRECT_DESC};
-use super::queue::{Chain, Queue};
+use super::queue::{Chain, Desc, Queue};
 use super::{Activation, Doorbell, ID_BLOCK, INT_USED_RING, Interrupt, VirtioDevice};
 use crate::disk::Disk;
 
 const F_SEG_MAX: u64 = 1 << 2;
 const F_FLUSH: u64 = 1 << 9;
+const F_DISCARD: u64 = 1 << 13;
+const F_WRITE_ZEROES: u64 = 1 << 14;
 
 const T_IN: u32 = 0;
 const T_OUT: u32 = 1;
 const T_FLUSH: u32 = 4;
 const T_GET_ID: u32 = 8;
+const T_DISCARD: u32 = 11;
+const T_WRITE_ZEROES: u32 = 13;
 
 const S_OK: u8 = 0;
 const S_IOERR: u8 = 1;
@@ -25,6 +29,17 @@ const S_UNSUPP: u8 = 2;
 const SECTOR: u64 = 512;
 const QUEUE_SIZE: u16 = 256;
 const SEG_MAX: u32 = 126;
+
+/// Largest single discard or write-zeroes segment (~2 GiB), as QEMU offers.
+const MAX_DWZ_SECTORS: u32 = 0x3f_ffff;
+/// Linux merges adjacent discards into one multi-segment request; write-zeroes is always one.
+const MAX_DISCARD_SEG: u32 = 32;
+const MAX_WRITE_ZEROES_SEG: u32 = 1;
+/// Discard granularity: one host filesystem block (4 KiB on APFS), the unit holes are punched in.
+const DISCARD_ALIGNMENT_SECTORS: u32 = 8;
+/// `virtio_blk_discard_write_zeroes`: le64 sector, le32 num_sectors, le32 flags.
+const DWZ_SEGMENT: usize = 16;
+const DWZ_F_UNMAP: u32 = 1;
 
 pub struct Blk {
     disk: Arc<Mutex<Disk>>,
@@ -59,7 +74,7 @@ impl VirtioDevice for Blk {
     }
 
     fn features(&self) -> u64 {
-        F_SEG_MAX | F_FLUSH | F_RING_INDIRECT_DESC | F_RING_EVENT_IDX
+        F_SEG_MAX | F_FLUSH | F_DISCARD | F_WRITE_ZEROES | F_RING_INDIRECT_DESC | F_RING_EVENT_IDX
     }
 
     fn num_queues(&self) -> usize {
@@ -74,6 +89,12 @@ impl VirtioDevice for Blk {
         let mut cfg = [0u8; 0x40];
         cfg[0x00..0x08].copy_from_slice(&self.capacity_sectors.to_le_bytes());
         cfg[0x0c..0x10].copy_from_slice(&SEG_MAX.to_le_bytes());
+        cfg[0x24..0x28].copy_from_slice(&MAX_DWZ_SECTORS.to_le_bytes()); // max_discard_sectors
+        cfg[0x28..0x2c].copy_from_slice(&MAX_DISCARD_SEG.to_le_bytes());
+        cfg[0x2c..0x30].copy_from_slice(&DISCARD_ALIGNMENT_SECTORS.to_le_bytes());
+        cfg[0x30..0x34].copy_from_slice(&MAX_DWZ_SECTORS.to_le_bytes()); // max_write_zeroes_sectors
+        cfg[0x34..0x38].copy_from_slice(&MAX_WRITE_ZEROES_SEG.to_le_bytes());
+        cfg[0x38] = 1; // write_zeroes_may_unmap: zeroed ranges become holes either way
         // Logical blocks stay 512 bytes (no VIRTIO_BLK_F_BLK_SIZE): the images' GPTs are laid
         // out in 512-byte LBAs.
         let off = offset as usize;
@@ -91,6 +112,7 @@ impl VirtioDevice for Blk {
             irq: act.irq,
             queue: Queue::new(cfg, act.features & F_RING_EVENT_IDX != 0),
             disk: self.disk.clone(),
+            capacity_sectors: self.capacity_sectors,
             serial: self.serial.clone(),
         };
         let b = bell.clone();
@@ -122,6 +144,7 @@ struct Worker {
     irq: Arc<Interrupt>,
     queue: Queue,
     disk: Arc<Mutex<Disk>>,
+    capacity_sectors: u64,
     serial: String,
 }
 
@@ -204,6 +227,7 @@ impl Worker {
                 written += n as u32;
                 Ok(())
             }
+            T_DISCARD | T_WRITE_ZEROES => self.discard_write_zeroes(typ, data),
             _ => Err(S_UNSUPP),
         })();
         let code = match result {
@@ -214,6 +238,48 @@ impl Worker {
             written += 1;
         }
         written
+    }
+
+    /// DISCARD and WRITE_ZEROES: both make the ranges read back as zeroes and free their host
+    /// storage (a discarded range may read back as anything, so zeroes are fine). The whole
+    /// request is validated before any segment is applied.
+    fn discard_write_zeroes(&self, typ: u32, data: &[Desc]) -> Result<(), u8> {
+        let (max_seg, allowed_flags) = if typ == T_DISCARD { (MAX_DISCARD_SEG, 0) } else { (MAX_WRITE_ZEROES_SEG, DWZ_F_UNMAP) };
+        if data.iter().any(|d| d.write) {
+            return Err(S_IOERR);
+        }
+        let total: usize = data.iter().map(|d| d.len as usize).sum();
+        if total == 0 || !total.is_multiple_of(DWZ_SEGMENT) {
+            return Err(S_IOERR);
+        }
+        if total / DWZ_SEGMENT > max_seg as usize {
+            return Err(S_UNSUPP);
+        }
+        let mut payload = vec![0u8; total];
+        let mut at = 0;
+        for d in data {
+            self.mem.read(d.addr, &mut payload[at..at + d.len as usize]).map_err(|_| S_IOERR)?;
+            at += d.len as usize;
+        }
+        let mut ranges = Vec::with_capacity(total / DWZ_SEGMENT);
+        for seg in payload.as_chunks::<DWZ_SEGMENT>().0 {
+            let sector = u64::from_le_bytes(seg[0..8].try_into().map_err(|_| S_IOERR)?);
+            let num = u32::from_le_bytes(seg[8..12].try_into().map_err(|_| S_IOERR)?);
+            let flags = u32::from_le_bytes(seg[12..16].try_into().map_err(|_| S_IOERR)?);
+            if flags & !allowed_flags != 0 {
+                return Err(S_UNSUPP);
+            }
+            match sector.checked_add(u64::from(num)) {
+                Some(end) if num <= MAX_DWZ_SECTORS && end <= self.capacity_sectors => {}
+                _ => return Err(S_IOERR),
+            }
+            ranges.push((sector * SECTOR, u64::from(num) * SECTOR));
+        }
+        let mut disk = self.disk.lock().map_err(|_| S_IOERR)?;
+        for (offset, len) in ranges {
+            disk.zero_range(offset, len).map_err(|_| S_IOERR)?;
+        }
+        Ok(())
     }
 }
 
@@ -232,6 +298,87 @@ mod tests {
         drv.push(mem, &[(hdr, 16, false), data, (RAM_BASE + 0x21000, 1, true)])
     }
 
+    fn worker(blk: &Blk, mem: &Arc<GuestRam>, irq: &Arc<Interrupt>, drv: &Driver) -> Worker {
+        Worker {
+            mem: mem.clone(),
+            irq: irq.clone(),
+            queue: Queue::new(drv.cfg, false),
+            disk: blk.disk.clone(),
+            capacity_sectors: blk.capacity_sectors,
+            serial: blk.serial.clone(),
+        }
+    }
+
+    fn status(mem: &GuestRam) -> u8 {
+        let mut st = [0u8; 1];
+        mem.read(RAM_BASE + 0x21000, &mut st).expect("status");
+        st[0]
+    }
+
+    /// Writes `virtio_blk_discard_write_zeroes` segments at `addr`; returns the payload length.
+    fn segments(mem: &GuestRam, addr: u64, segs: &[(u64, u32, u32)]) -> u32 {
+        for (i, &(sector, num, flags)) in segs.iter().enumerate() {
+            let mut s = [0u8; 16];
+            s[..8].copy_from_slice(&sector.to_le_bytes());
+            s[8..12].copy_from_slice(&num.to_le_bytes());
+            s[12..].copy_from_slice(&flags.to_le_bytes());
+            mem.write(addr + 16 * i as u64, &s).expect("segment");
+        }
+        16 * segs.len() as u32
+    }
+
+    #[test]
+    fn discard_and_write_zeroes() {
+        const SECTORS: u64 = 128;
+        let path = std::env::temp_dir().join(format!("emu-blk-dwz-{}", std::process::id()));
+        std::fs::write(&path, vec![7u8; (SECTORS * SECTOR) as usize]).expect("write");
+        let mem = Arc::new(GuestRam::new(RAM_BASE, 0x10_0000).expect("ram"));
+        let irq = Arc::new(Interrupt::new(Arc::new(TestLine::default())));
+        let mut drv = Driver::new(64);
+        let blk = Blk::new(Disk::persistent(&path).expect("open"), "vdc");
+        assert_eq!(blk.features() & (F_DISCARD | F_WRITE_ZEROES), F_DISCARD | F_WRITE_ZEROES);
+        let mut cfg = [0u8; 0x18];
+        blk.read_config(0x24, &mut cfg);
+        assert_eq!(&cfg[0..4], &MAX_DWZ_SECTORS.to_le_bytes(), "max_discard_sectors");
+        assert_eq!(&cfg[8..12], &8u32.to_le_bytes(), "discard_sector_alignment");
+        assert_eq!(cfg[0x14], 1, "write_zeroes_may_unmap");
+        let mut w = worker(&blk, &mem, &irq, &drv);
+        let seg = RAM_BASE + 0x30000;
+        let mut send = |w: &mut Worker, typ: u32, segs: &[(u64, u32, u32)]| {
+            let len = segments(&mem, seg, segs);
+            request(&mem, &mut drv, typ, 0, (seg, len, false));
+            w.drain();
+            status(&mem)
+        };
+
+        // Unaligned write-zeroes (punch path writes the zeroes), an aligned discard (a real
+        // hole), a two-segment discard and a write-zeroes that allows unmapping.
+        assert_eq!(send(&mut w, T_WRITE_ZEROES, &[(1, 2, 0)]), S_OK);
+        assert_eq!(send(&mut w, T_DISCARD, &[(16, 64, 0)]), S_OK);
+        assert_eq!(send(&mut w, T_DISCARD, &[(100, 4, 0), (110, 2, 0)]), S_OK);
+        assert_eq!(send(&mut w, T_WRITE_ZEROES, &[(120, 8, DWZ_F_UNMAP)]), S_OK);
+        let data = std::fs::read(&path).expect("read");
+        let zeroed =
+            |s: u64| (1..3).contains(&s) || (16..80).contains(&s) || (100..104).contains(&s) || (110..112).contains(&s) || s >= 120;
+        for s in 0..SECTORS {
+            let want = if zeroed(s) { 0 } else { 7 };
+            let bytes = &data[(s * SECTOR) as usize..((s + 1) * SECTOR) as usize];
+            assert!(bytes.iter().all(|&b| b == want), "sector {s}");
+        }
+
+        // Rejections leave the disk alone.
+        assert_eq!(send(&mut w, T_DISCARD, &[(0, 1, DWZ_F_UNMAP)]), S_UNSUPP, "unmap flag on discard");
+        assert_eq!(send(&mut w, T_WRITE_ZEROES, &[(0, 1, 2)]), S_UNSUPP, "unknown flag");
+        assert_eq!(send(&mut w, T_WRITE_ZEROES, &[(0, 1, 0), (4, 1, 0)]), S_UNSUPP, "too many segments");
+        assert_eq!(send(&mut w, T_DISCARD, &[(0, 1, 0), (SECTORS - 1, 2, 0)]), S_IOERR, "past the end");
+        assert_eq!(send(&mut w, T_WRITE_ZEROES, &[(u64::MAX, 2, 0)]), S_IOERR, "overflow");
+        request(&mem, &mut drv, T_DISCARD, 0, (seg, 8, false)); // truncated segment
+        w.drain();
+        assert_eq!(status(&mem), S_IOERR);
+        assert_eq!(std::fs::read(&path).expect("read")[0], 7, "first sector untouched");
+        let _ = std::fs::remove_file(path);
+    }
+
     #[test]
     fn reads_writes_and_reports_status() {
         let path = std::env::temp_dir().join(format!("emu-blk-{}", std::process::id()));
@@ -241,8 +388,7 @@ mod tests {
         let irq = Arc::new(Interrupt::new(line.clone()));
         let mut drv = Driver::new(16);
         let blk = Blk::new(Disk::persistent(&path).expect("open"), "vda");
-        let mut w =
-            Worker { mem: mem.clone(), irq: irq.clone(), queue: Queue::new(drv.cfg, false), disk: blk.disk.clone(), serial: "vda".into() };
+        let mut w = worker(&blk, &mem, &irq, &drv);
         let buf = RAM_BASE + 0x30000;
         mem.write(buf, &[9u8; 512]).expect("w");
         request(&mem, &mut drv, T_OUT, 2, (buf, 512, false));
@@ -257,13 +403,10 @@ mod tests {
         assert_eq!(drv.used(&mem, 1).1, 1025);
         request(&mem, &mut drv, T_IN, 16, (buf, 512, true)); // past the end
         w.drain();
-        let mut st = [0u8; 1];
-        mem.read(RAM_BASE + 0x21000, &mut st).expect("r");
-        assert_eq!(st[0], S_IOERR);
+        assert_eq!(status(&mem), S_IOERR);
         request(&mem, &mut drv, 99, 0, (buf, 512, true));
         w.drain();
-        mem.read(RAM_BASE + 0x21000, &mut st).expect("r");
-        assert_eq!(st[0], S_UNSUPP);
+        assert_eq!(status(&mem), S_UNSUPP);
         let _ = std::fs::remove_file(path);
     }
 }

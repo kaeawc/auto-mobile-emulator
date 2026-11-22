@@ -57,7 +57,9 @@ and run its tools one by one, fixing whatever breaks:
 - Snapshots: save and restore guest RAM and device state. Copy-on-write RAM files make restore
   near-instant.
 - virtio-balloon free-page reporting, so idle guests hand memory back to the host.
-- `DISCARD`/`WRITE_ZEROES` with `F_PUNCHHOLE`, keeping userdata sparse.
+- ~~`DISCARD`/`WRITE_ZEROES` with `F_PUNCHHOLE`, keeping userdata sparse.~~ Done. `/data`
+  sits on dm-default-key, which passes discard but not write-zeroes, so freed space returns
+  via discard (online discard or periodic fstrim).
 - ~~Native ext4 formatter, removing the dependency on the SDK's `mkfs.ext4`.~~ Done
   (`crates/emu-ext4`): first-boot userdata needs neither the emulator package nor e2fsprogs,
   so the Java-free path (`emu -provision`) is complete. Checked with e2fsck 1.42 (SDK) and

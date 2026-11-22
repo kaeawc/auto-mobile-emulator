@@ -4,10 +4,12 @@
 //! - [`Vm`]: the process-wide virtual machine and its in-kernel GICv3,
 //! - [`GuestRam`]: host memory mapped into the guest, with bounds-checked accessors,
 //! - [`Vcpu`]: a virtual CPU, pinned to the thread that created it,
-//! - [`VcpuHandle`]: a sendable token used to kick a vCPU out of the guest.
+//! - [`VcpuHandle`]: a sendable token used to kick a vCPU out of the guest,
+//! - [`host`]: host file syscalls std doesn't wrap (hole punching).
 #![cfg(all(target_os = "macos", target_arch = "aarch64"))]
 
 mod ffi;
+pub mod host;
 mod ram;
 
 use std::marker::PhantomData;

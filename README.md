@@ -13,7 +13,7 @@ to use fewer resources.
 | --- | --- |
 | VM core | vCPUs, the framework's in-kernel GICv3, PSCI (SMP, power off and reset), arch timer, PL011 console, PL031 RTC |
 | Board | Stock memory map and virtio-mmio slots, so the unmodified fstab and first-stage init find `vda`–`vde` and their by-name paths |
-| Storage | virtio-blk with indirect descriptors and event-idx. System and vendor are copy-on-write in memory; userdata, cache and metadata persist per AVD. Userdata is created by a native ext4 formatter (no `mkfs.ext4`) |
+| Storage | virtio-blk with indirect descriptors, event-idx, and discard/write-zeroes (hole punching). System and vendor are copy-on-write in memory; userdata, cache and metadata persist per AVD. Userdata is created by a native ext4 formatter (no `mkfs.ext4`) |
 | Boot | Kernel, first-stage init, dm-linear `super`, second-stage init, metadata encryption of `/data`, APEX activation, adbd |
 | adb | virtio-vsock with a host bridge on `console port + 1`, announced to the adb server. `adb shell`/`root`/`push` work, and the device shows up about 8 s after launch on a warm boot |
 | Console | `adb emu` / telnet console with token auth: `avd name`, `ping`, `kill` |
@@ -116,6 +116,13 @@ What has mattered so far, measured with `sample` and the `-verbose` exit counter
   worker thread per disk, so the vCPU that kicked a queue goes back to the guest at once.
 - **Sparse, lazily committed memory.** Guest RAM is an untouched anonymous mapping and the
   userdata image is a sparse file.
+- **Discard punches holes.** virtio-blk `DISCARD`/`WRITE_ZEROES` become `F_PUNCHHOLE` on
+  persistent images (an in-memory zeroed-range set on ephemeral ones), so space the guest frees
+  goes back to the host: with `/data` mounted `-o discard`, writing then deleting 512 MiB grew
+  the image by 525 MB and shrank it by 524 MB. A whole-disk FITRIM takes 90 ms. `/data` sits on
+  dm-default-key metadata encryption, which passes discard through but not write-zeroes, and
+  zeroes it writes land as ciphertext. So discard is the only way to free space, and a fresh
+  first boot (about 610 MB allocated) has only about 2 MB left to trim.
 
 ## Development
 

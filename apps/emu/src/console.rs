@@ -124,6 +124,22 @@ fn screenshot(info: &ConsoleInfo, path: Option<&str>) -> String {
     }
 }
 
+/// Commands this console implements (stock names first, then emu-rs extensions).
+const HELP: &[(&str, &str)] = &[
+    ("help|h|?", "print a list of commands"),
+    ("kill", "kill the emulator instance"),
+    ("quit|exit", "quit control session"),
+    ("event", "simulate hardware events"),
+    ("avd", "control virtual device execution"),
+    ("finger", "manage emulator fingerprint"),
+    ("ping", "check if the emulator is alive"),
+    ("sensor", "manage emulator sensors"),
+    ("screenshot", "take a screenshot of the display"),
+    ("touch", "touch the screen at x y (emu-rs)"),
+    ("clipboard", "get or set the guest clipboard (emu-rs)"),
+    ("frames", "number of frames presented (emu-rs)"),
+];
+
 fn token_path() -> Option<PathBuf> {
     std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".emulator_console_auth_token"))
 }
@@ -188,15 +204,19 @@ fn session(stream: TcpStream, info: &ConsoleInfo) -> std::io::Result<()> {
                     "KO: authentication token does not match ~/.emulator_console_auth_token".to_string()
                 }
             }
-            ("quit" | "exit", _) => {
-                out.write_all(b"OK\r\n")?;
-                return Ok(());
-            }
+            // Stock closes without a reply; `adb emu <cmd>` sends `quit` after the command and
+            // prints everything it reads, so an extra OK leaks into answers like `avd name`.
+            ("quit" | "exit", _) => return Ok(()),
             (_, false) => "KO: unknown command, try 'help'".to_string(),
-            ("help" | "h" | "?", true) => "Android console commands:\r\n\r\n    help|h|?         print a list of commands\r\n    \
-                 avd              control virtual device execution\r\n    kill             kill the emulator instance\r\n    \
-                 ping             check if the emulator is alive\r\n    quit|exit        quit control session\r\n\r\nOK"
-                .to_string(),
+            // Lists what emu-rs implements, in stock's format (tools probe it, e.g. for "finger").
+            ("help" | "h" | "?", true) => {
+                let mut s = String::from("Android console commands:\r\n\r\n");
+                for (name, what) in HELP {
+                    s.push_str(&format!("    {name:<16} {what}\r\n"));
+                }
+                s.push_str("\r\ntry 'help <command>' for command-specific help\r\nOK");
+                s
+            }
             ("ping", true) => "I am alive!\r\nOK".to_string(),
             ("screenshot", true) => screenshot(info, words.get(1).copied()),
             ("event", true) => event(info, &words[1..]),

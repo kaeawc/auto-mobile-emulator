@@ -54,9 +54,31 @@ session=$(echo "$out" | grep -oE 'sessionUuid[^0-9a-f]*[0-9a-f-]{36}' | head -1 
 # One line per tool: name, then arguments. Extend as emu-rs grows; the matrix shows what's left.
 tools=(
   "observe"
-  "pressButton --button home"
-  "pressButton --button back"
   "listDevices"
+  "pressButton --button home"
+  "swipeOn --direction up"
+  "pressButton --button home"
+  "tapAt --x 540 --y 1200"
+  "launchApp --appId com.android.settings"
+  "swipeOn --direction up"
+  "rotate --orientation landscape --lockOrientation true"
+  "rotate --orientation portrait"
+  "pressButton --button back"
+  "recentApps"
+  "homeScreen"
+  "listApps"
+  "getDeviceState"
+  "setSensor --sensor light --value [123]"
+  "setSensor --sensor acceleration --value [0,9.8,0]"
+  "setSensor --sensor light --reset true"
+  "shake --duration 500"
+  "clipboard --action copy --text emu-rs"
+  "biometricAuth --action match --modality fingerprint"
+  "sendSms --phoneNumber 5551234 --message hello"
+  "phoneCall --action call --phoneNumber 5551234"
+  "phoneCall --action cancel --phoneNumber 5551234"
+  "statusBar --action get"
+  "wakeAndUnlock"
 )
 pass=0; fail=0
 printf 'tool\tresult\n' > "$root/coverage.tsv"
@@ -66,7 +88,7 @@ for line in "${tools[@]}"; do
     result=pass; pass=$((pass + 1))
   else
     result=fail; fail=$((fail + 1))
-    echo "$out" | tail -8 > "$root/fail-${argv[0]}.log"
+    echo "$out" | tail -8 > "$root/fail-$(printf '%s' "$line" | tr -c 'A-Za-z0-9' _).log"
   fi
   printf '%-40s %s\n' "$line" "$result"
   printf '%s\t%s\n' "$line" "$result" >> "$root/coverage.tsv"

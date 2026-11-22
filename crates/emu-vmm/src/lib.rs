@@ -46,6 +46,14 @@ pub struct DiskSpec {
     pub serial: String,
 }
 
+/// Ways for the host to inject input into the running guest.
+#[derive(Clone)]
+pub struct Inputs {
+    pub touch: virtio::input::InputHandle,
+    pub keyboard: virtio::input::InputHandle,
+    pub rotary: virtio::input::InputHandle,
+}
+
 /// Host GPU rendering through gfxstream.
 pub struct GpuSpec {
     /// The SDK's `emulator/lib64` (holds `libgfxstream_backend.dylib`).
@@ -82,6 +90,10 @@ pub struct MachineConfig {
     pub gpu: Option<GpuSpec>,
     /// Served to the guest's `qemu-props` over the `qemud:boot-properties` pipe.
     pub boot_props: Vec<(String, String)>,
+    /// Touchscreen size; enables the virtio-input touchscreen, keyboard and rotary devices.
+    pub input: Option<(u32, u32)>,
+    /// Receives the input handles of this run (they change when the guest reboots).
+    pub on_input: Option<Arc<dyn Fn(Inputs) + Send + Sync>>,
     /// Where guest console (PL011) output goes.
     pub console: Box<dyn Write + Send>,
 }
@@ -206,6 +218,18 @@ pub fn run(cfg: MachineConfig, stop: Arc<AtomicBool>) -> Result<Outcome> {
             display: spec.display.clone(),
         });
         slots[slots::GPU as usize] = Some(Box::new(gpu));
+    }
+    if let Some((w, h)) = cfg.input {
+        use virtio::input::{Input, Kind};
+        let (touch, th) = Input::new(Kind::Touch { width: w, height: h }, "virtio_input_multi_touch_1");
+        let (kbd, kh) = Input::new(Kind::Keyboard, "virtio_input_keyboard");
+        let (rot, rh) = Input::new(Kind::Rotary, "virtio_input_rotary");
+        slots[slots::TOUCH as usize] = Some(Box::new(touch));
+        slots[slots::KEYBOARD as usize] = Some(Box::new(kbd));
+        slots[slots::ROTARY as usize] = Some(Box::new(rot));
+        if let Some(cb) = &cfg.on_input {
+            cb(Inputs { touch: th, keyboard: kh, rotary: rh });
+        }
     }
     if let Some(port) = cfg.adb_port {
         let (events, rx) = virtio::vsock::event_channel();

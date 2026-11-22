@@ -13,6 +13,65 @@ pub struct ConsoleInfo {
     pub avd_name: String,
     pub stop: Arc<AtomicBool>,
     pub display: Option<Arc<emu_vmm::virtio::gpu::FrameStore>>,
+    pub inputs: Arc<std::sync::Mutex<Option<emu_vmm::Inputs>>>,
+}
+
+/// `event send <type>:<code>:<value> ...` (stock syntax, e.g. `EV_KEY:KEY_POWER:1`,
+/// `EV_REL:REL_WHEEL:-1`) and `event text <string>`.
+fn event(info: &ConsoleInfo, words: &[&str]) -> String {
+    use emu_vmm::virtio::input::{EV_ABS, EV_KEY, EV_REL, EV_SYN, InputEvent, keycode};
+    let guard = info.inputs.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(inputs) = guard.as_ref() else { return "KO: no input devices".into() };
+    match words.first().copied() {
+        Some("send") => {
+            let mut batches: Vec<(u16, InputEvent)> = Vec::new();
+            for spec in &words[1..] {
+                let parts: Vec<&str> = spec.split(':').collect();
+                let [t, c, v] = parts.as_slice() else { return format!("KO: bad event '{spec}'") };
+                let typ = match *t {
+                    "EV_SYN" => EV_SYN,
+                    "EV_KEY" => EV_KEY,
+                    "EV_REL" => EV_REL,
+                    "EV_ABS" => EV_ABS,
+                    other => match other.parse() {
+                        Ok(n) => n,
+                        Err(_) => return format!("KO: bad event type '{other}'"),
+                    },
+                };
+                let code = match (typ, *c) {
+                    (EV_REL, "REL_WHEEL") => emu_vmm::virtio::input::REL_WHEEL,
+                    (EV_KEY, name) => match keycode(name).or_else(|| name.parse().ok()) {
+                        Some(k) => k,
+                        None => return format!("KO: unknown key '{name}'"),
+                    },
+                    (_, n) => match n.parse() {
+                        Ok(k) => k,
+                        Err(_) => return format!("KO: bad code '{n}'"),
+                    },
+                };
+                let Ok(value) = v.parse::<i32>() else { return format!("KO: bad value '{v}'") };
+                batches.push((typ, InputEvent::new(typ, code, value)));
+            }
+            for (typ, ev) in batches {
+                let dev = match typ {
+                    EV_REL => &inputs.rotary,
+                    EV_ABS => &inputs.touch,
+                    _ => &inputs.keyboard,
+                };
+                dev.send(vec![ev, InputEvent::syn()]);
+            }
+            "OK".into()
+        }
+        Some("text") => {
+            for ch in words[1..].join(" ").chars() {
+                if let Some(k) = keycode(&ch.to_string()).or_else(|| (ch == ' ').then_some(57)) {
+                    inputs.keyboard.tap_key(k);
+                }
+            }
+            "OK".into()
+        }
+        _ => "KO: usage: event send <type>:<code>:<value> ... | event text <string>".into(),
+    }
 }
 
 /// `screenshot [path]`: the latest scanout frame as PNG.
@@ -105,6 +164,25 @@ fn session(stream: TcpStream, info: &ConsoleInfo) -> std::io::Result<()> {
                 .to_string(),
             ("ping", true) => "I am alive!\r\nOK".to_string(),
             ("screenshot", true) => screenshot(info, words.get(1).copied()),
+            ("event", true) => event(info, &words[1..]),
+            ("touch", true) => {
+                // emu-rs extension: `touch <x> <y> [down|up|tap]` in device pixels.
+                let g = info.inputs.lock().unwrap_or_else(|e| e.into_inner());
+                match (g.as_ref(), words.get(1).and_then(|v| v.parse().ok()), words.get(2).and_then(|v| v.parse().ok())) {
+                    (Some(i), Some(x), Some(y)) => {
+                        match words.get(3).copied().unwrap_or("tap") {
+                            "down" => i.touch.touch(x, y, true),
+                            "up" => i.touch.touch(x, y, false),
+                            _ => {
+                                i.touch.touch(x, y, true);
+                                i.touch.touch(x, y, false);
+                            }
+                        }
+                        "OK".to_string()
+                    }
+                    _ => "KO: usage: touch <x> <y> [down|up|tap]".to_string(),
+                }
+            }
             ("frames", true) => match &info.display {
                 Some(d) => format!("{}\r\nOK", d.frames()),
                 None => "KO: no display".to_string(),

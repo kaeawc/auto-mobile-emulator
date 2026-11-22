@@ -28,6 +28,8 @@ pub struct Instance {
     /// Latest guest frame, when host rendering is on.
     pub display: Option<std::sync::Arc<emu_vmm::virtio::gpu::FrameStore>>,
     gpu_lib64: Option<PathBuf>,
+    /// Input handles of the current run, for the console and desktop.
+    pub inputs: std::sync::Arc<std::sync::Mutex<Option<emu_vmm::Inputs>>>,
     _lock: Option<File>,
 }
 
@@ -94,7 +96,16 @@ impl Instance {
             emu_gfxstream::configure_environment(emulator_dir, icd);
         }
         let display = gpu_lib64.as_ref().map(|_| std::sync::Arc::new(emu_vmm::virtio::gpu::FrameStore::default()));
-        Ok(Instance { avd: avd.clone(), dir, read_only: opts.read_only, console_port, display, gpu_lib64, _lock: lock })
+        Ok(Instance {
+            avd: avd.clone(),
+            dir,
+            read_only: opts.read_only,
+            console_port,
+            display,
+            gpu_lib64,
+            inputs: Default::default(),
+            _lock: lock,
+        })
     }
 
     fn bootconfig(&self, opts: &Opts) -> BootConfig {
@@ -190,6 +201,11 @@ impl Instance {
                 display: display.clone(),
             }),
             boot_props: self.boot_props(),
+            input: Some((self.avd.lcd().0, self.avd.lcd().1)),
+            on_input: {
+                let slot = self.inputs.clone();
+                Some(std::sync::Arc::new(move |i| *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(i)))
+            },
             console,
         })
     }

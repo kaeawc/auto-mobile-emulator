@@ -62,6 +62,10 @@ pub fn virtio_slot_addr(slot: u32) -> u64 {
 pub mod slots {
     /// virtio-gpu (stock uses goldfish pipe + address space instead).
     pub const GPU: u32 = 23;
+    /// virtio-input: touchscreen, keyboard, rotary (stock puts 11 input devices on PCI).
+    pub const TOUCH: u32 = 20;
+    pub const KEYBOARD: u32 = 21;
+    pub const ROTARY: u32 = 22;
     /// Not on the stock board (which puts vsock on PCI); the guest driver doesn't care.
     pub const VSOCK: u32 = 24;
     pub const RNG: u32 = 25;

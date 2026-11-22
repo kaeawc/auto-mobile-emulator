@@ -57,6 +57,26 @@ impl PartialOrd for Revision {
     }
 }
 
+/// Parses what [`Revision`]'s `Display` prints (`37`, `37.3.10`, `38.0.0-rc2`).
+impl std::str::FromStr for Revision {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Revision> {
+        let bad = || Error::Manifest(format!("bad revision '{s}'"));
+        let (version, preview) = match s.split_once("-rc") {
+            Some((v, p)) => (v, Some(p.parse().map_err(|_| bad())?)),
+            None => (s, None),
+        };
+        let parts = version.split('.').map(|p| p.parse::<u32>().map_err(|_| bad())).collect::<Result<Vec<_>>>()?;
+        match parts.as_slice() {
+            [major] => Ok(Revision { major: *major, minor: 0, micro: 0, preview }),
+            [major, minor] => Ok(Revision { major: *major, minor: *minor, micro: 0, preview }),
+            [major, minor, micro] => Ok(Revision { major: *major, minor: *minor, micro: *micro, preview }),
+            _ => Err(bad()),
+        }
+    }
+}
+
 impl fmt::Display for Revision {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.major)?;

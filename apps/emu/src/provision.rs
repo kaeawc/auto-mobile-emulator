@@ -1,10 +1,11 @@
-//! `-provision` and `-list-images`: install what emu-rs needs (platform-tools and a system
-//! image) straight from Google's repository, with no Java, sdkmanager or avdmanager.
+//! `-provision`, `-provision-renderer` and `-list-images`: install what emu-rs needs
+//! (platform-tools, a system image and the gfxstream renderer) straight from Google's
+//! repository, with no Java, sdkmanager or avdmanager.
 use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 use emu_avd::Env;
-use emu_sdk::{Host, Sdk};
+use emu_sdk::{Host, Sdk, renderer};
 
 use crate::args::Opts;
 
@@ -77,6 +78,9 @@ pub fn provision(env: &Env, api: &str, opts: &Opts) -> Result<()> {
         let dest = sdk.install(&d)?;
         println!("installed {path} r{} at {}", d.revision, dest.display());
     }
+    if !opts.no_renderer {
+        renderer(&sdk, opts, opts.provision_renderer)?;
+    }
 
     if let Some(name) = &opts.create_avd {
         let sysdir = emu_sdk::install_dir(&image).to_string_lossy().into_owned();
@@ -87,5 +91,62 @@ pub fn provision(env: &Env, api: &str, opts: &Opts) -> Result<()> {
             crate::create_avd(&env, name, &sysdir, opts)?;
         }
     }
+    Ok(())
+}
+
+/// `-provision-renderer`: install (or update to) the newest renderer.
+pub fn provision_renderer(env: &Env, opts: &Opts) -> Result<()> {
+    let sdk = sdk(env)?;
+    println!("SDK: {}", sdk.root().display());
+    renderer(&sdk, opts, true)
+}
+
+/// Installs the gfxstream renderer out of the `emulator` package. With `update` the newest
+/// stable revision is installed unless it already is; without it (plain `-provision`) any
+/// renderer the SDK already has will do, including the SDK's own emulator package.
+fn renderer(sdk: &Sdk, opts: &Opts, update: bool) -> Result<()> {
+    let root = sdk.root();
+    let sdk_package = renderer::sdk_emulator_lib64(root);
+    let installed = renderer::installed(root);
+    let existing = sdk_package.clone().or_else(|| installed.first().map(renderer::Installed::lib64));
+    if !update
+        && !opts.dry_run
+        && let Some(lib64) = &existing
+    {
+        println!("have renderer ({})", lib64.display());
+        return Ok(());
+    }
+    let d = sdk.manifest(&emu_sdk::repository_url())?.resolve(renderer::PACKAGE, HOST)?;
+    let have = installed.iter().find(|i| i.marker.revision == d.revision);
+    if opts.dry_run {
+        let state = match (have, &existing) {
+            (Some(_), _) => " (installed)".to_string(),
+            (None, Some(lib64)) if !update => format!(" (not needed: have {})", lib64.display()),
+            _ => String::new(),
+        };
+        println!("renderer: {} r{}{state}", renderer::PACKAGE, d.revision);
+        println!("  url  {}", d.url);
+        println!("  size {} ({})", d.size, emu_sdk::format_size(d.size));
+        println!("  sha1 {}", d.sha1);
+        println!("  only {} (not {})", renderer::INCLUDE.join(" "), renderer::EXCLUDE.join(" "));
+        println!("  into {}", renderer::dir(root, d.revision).join("lib64").display());
+        return Ok(());
+    }
+    if let Some(i) = have {
+        println!("have renderer r{} ({})", d.revision, i.lib64().display());
+        return Ok(());
+    }
+    if let Some(lib64) = &sdk_package {
+        println!("note: the SDK's emulator package ({}) stays the renderer emu uses while it is installed", lib64.display());
+    }
+    println!("installing renderer r{} (lib64 of the {} package)", d.revision, renderer::PACKAGE);
+    let inst = sdk.install_renderer(&d)?;
+    println!(
+        "installed renderer r{} at {} ({} on disk, from a {} archive)",
+        d.revision,
+        inst.lib64().display(),
+        emu_sdk::format_size(renderer::disk_usage(&inst.dir)),
+        emu_sdk::format_size(d.size)
+    );
     Ok(())
 }

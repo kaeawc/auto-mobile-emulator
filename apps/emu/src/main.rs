@@ -128,6 +128,10 @@ fn real_main() -> Result<ExitCode> {
         provision::provision(&env, api, &opts)?;
         return Ok(ExitCode::SUCCESS);
     }
+    if opts.provision_renderer {
+        provision::provision_renderer(&env, &opts)?;
+        return Ok(ExitCode::SUCCESS);
+    }
     if let Some(name) = &opts.create_avd {
         let sysdir = opts.sysdir.clone().context("-create-avd needs -sysdir system-images/<target>/<tag>/<abi>")?;
         create_avd(&env, name, &sysdir, &opts)?;

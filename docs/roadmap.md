@@ -32,6 +32,18 @@ SurfaceFlinger needs a host renderer. Two routes, both backed by gfxstream:
 - **goldfish_pipe + goldfish address space** (stock's own transport): more devices, private
   interfaces.
 
+The renderer on a Java-free install — done (2026-11-22): `emu -provision` (or
+`-provision-renderer` alone) fetches the `emulator` package on demand and unpacks only its
+`lib64` minus Qt (498 MB of the 1.32 GB package, from a 420.6 MB download) into
+`<sdk>/emu-rs/renderer/<revision>/`. emu prefers the SDK's own `emulator/lib64` when present.
+`Renderer::load` preloads the backend's `@rpath` dependencies leaves-first, so the location
+needs no rpath; bare-name `dlopen`s (`libshadertranslator.dylib`) still go through the
+executable's rpaths, hence the `lib64` link beside the binary and the
+`emu-rs/renderer/current/lib64` rpath. Open: without `-gpu`, `ANDROID_EMU_VK_ICD` is unset and
+gfxstream finds no Vulkan ICD ("Failed to create Vulkan instance", Vulkan disabled) with either
+renderer location; `moltenvk` and `lavapipe` initialize cleanly, while `swiftshader` aborts
+during init (both 37.2.13 and 37.3.10).
+
 Then the display path: scanout frames to the Rune window, zero-copy via IOSurface/Metal where
 possible, plus input. virtio-input (touch, keyboard, rotary) and the PL061 power key go in the
 same milestone. Done when `sys.boot_completed=1` and `pm list packages` answers, which is

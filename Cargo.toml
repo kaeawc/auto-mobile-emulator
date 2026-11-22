@@ -24,6 +24,7 @@ emu-sdk = { path = "crates/emu-sdk" }
 emu-vmm = { path = "crates/emu-vmm" }
 
 anyhow = "1"
+crc32fast = { version = "1", default-features = false, features = ["std"] }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 libc = { version = "0.2", default-features = false }
 # Safe syscall wrappers (plain fsync: std's sync_data is F_FULLFSYNC on macOS).

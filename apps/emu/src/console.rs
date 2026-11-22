@@ -12,6 +12,22 @@ use anyhow::{Context, Result};
 pub struct ConsoleInfo {
     pub avd_name: String,
     pub stop: Arc<AtomicBool>,
+    pub display: Option<Arc<emu_vmm::virtio::gpu::FrameStore>>,
+}
+
+/// `screenshot [path]`: the latest scanout frame as PNG.
+fn screenshot(info: &ConsoleInfo, path: Option<&str>) -> String {
+    let Some(display) = &info.display else { return "KO: no display (started with -gpu off?)".into() };
+    let f = display.snapshot();
+    if f.frames == 0 {
+        return "KO: no frame presented yet".into();
+    }
+    let rgba = crate::png::to_rgba(f.width, f.height, f.stride, f.format, &f.pixels);
+    let path = path.map(PathBuf::from).unwrap_or_else(|| std::env::temp_dir().join(format!("emu-rs-{}.png", std::process::id())));
+    match crate::png::encode(f.width, f.height, &rgba).and_then(|png| std::fs::write(&path, png)) {
+        Ok(()) => format!("{} ({}x{}, frame {})\r\nOK", path.display(), f.width, f.height, f.frames),
+        Err(e) => format!("KO: {e}"),
+    }
 }
 
 fn token_path() -> Option<PathBuf> {
@@ -88,6 +104,11 @@ fn session(stream: TcpStream, info: &ConsoleInfo) -> std::io::Result<()> {
                  ping             check if the emulator is alive\r\n    quit|exit        quit control session\r\n\r\nOK"
                 .to_string(),
             ("ping", true) => "I am alive!\r\nOK".to_string(),
+            ("screenshot", true) => screenshot(info, words.get(1).copied()),
+            ("frames", true) => match &info.display {
+                Some(d) => format!("{}\r\nOK", d.frames()),
+                None => "KO: no display".to_string(),
+            },
             ("kill", true) => {
                 out.write_all(b"OK: killing emulator, bye bye\r\n")?;
                 info.stop.store(true, Ordering::SeqCst);

@@ -7,6 +7,7 @@
 mod args;
 mod console;
 mod instance;
+mod png;
 mod provision;
 
 use std::process::ExitCode;
@@ -117,7 +118,10 @@ fn real_main() -> Result<ExitCode> {
 
     let avd = env.load(&name)?;
     let inst = instance::Instance::prepare(&avd, &opts)?;
-    console::serve(inst.console_port, console::ConsoleInfo { avd_name: avd.name.clone(), stop: stop.clone() })?;
+    console::serve(
+        inst.console_port,
+        console::ConsoleInfo { avd_name: avd.name.clone(), stop: stop.clone(), display: inst.display.clone() },
+    )?;
     let _advert = console::Advertisement::write(&avd.name, &avd.dir, inst.console_port);
     // On stdout: launchers watch for the first line and the `emulator-<port>` serial.
     println!("emu: {} on emulator-{} (adb port {})", avd.name, inst.console_port, inst.console_port + 1);

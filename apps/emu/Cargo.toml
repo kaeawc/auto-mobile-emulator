@@ -19,6 +19,8 @@ emu-ext4.workspace = true
 emu-vmm.workspace = true
 emu-gfxstream.workspace = true
 libc.workspace = true
+flate2.workspace = true
+crc32fast.workspace = true
 
 [lints]
 workspace = true

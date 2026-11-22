@@ -90,6 +90,7 @@ impl Instance {
                 Some("lavapipe") => Some("lavapipe"),
                 _ => None,
             };
+            link_lib64_beside_exe(lib64);
             emu_gfxstream::configure_environment(emulator_dir, icd);
         }
         let display = gpu_lib64.as_ref().map(|_| std::sync::Arc::new(emu_vmm::virtio::gpu::FrameStore::default()));
@@ -191,6 +192,17 @@ impl Instance {
             boot_props: self.boot_props(),
             console,
         })
+    }
+}
+
+/// gfxstream finds its Vulkan loader and ICD manifests under `<exe dir>/lib64/vulkan` (it
+/// rewrites `VK_ICD_FILENAMES` itself). In an SDK overlay that's already true; for a build in
+/// `target/` link the SDK's `lib64` next to the binary. Best effort: skipped if not writable.
+fn link_lib64_beside_exe(lib64: &std::path::Path) {
+    let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(std::path::Path::to_path_buf)) else { return };
+    let link = dir.join("lib64");
+    if link.symlink_metadata().is_err() {
+        let _ = std::os::unix::fs::symlink(lib64, &link);
     }
 }
 

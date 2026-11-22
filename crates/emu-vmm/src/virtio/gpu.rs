@@ -284,6 +284,12 @@ impl Hdr {
     }
 }
 
+/// `EMU_GPU_TRACE=1` logs every command, fence creation and fence signal to stderr.
+fn trace() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("EMU_GPU_TRACE").is_some())
+}
+
 fn le32(b: &[u8], o: usize) -> u32 {
     b.get(o..o + 4).map_or(0, |s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
 }
@@ -360,6 +366,17 @@ impl Worker {
                 None => (Hdr::default(), Hdr::default().reply(cmd::ERR_UNSPEC)),
             };
             let len = chain.write_all(&self.mem, &resp).unwrap_or(0);
+            if trace() {
+                eprintln!(
+                    "gpu: cmd {:#06x} ctx {} flags {:#x} fence {} ring {} -> {:#06x}",
+                    hdr.typ,
+                    hdr.ctx_id,
+                    hdr.flags,
+                    hdr.fence_id,
+                    hdr.ring_idx,
+                    le32(&resp, 0)
+                );
+            }
             if hdr.flags & FLAG_FENCE != 0 {
                 let ringed = hdr.flags & FLAG_RING_IDX != 0;
                 let timeline = if ringed { (hdr.ctx_id, hdr.ring_idx) } else { (0, 0) };
@@ -381,6 +398,16 @@ impl Worker {
     }
 
     fn complete_fences(&mut self, f: Fence) -> bool {
+        if trace() {
+            eprintln!(
+                "gpu: fence signaled id {} ctx {} ring {} flags {:#x} (pending {})",
+                f.fence_id,
+                f.ctx_id,
+                f.ring_idx,
+                f.flags,
+                self.pending.len()
+            );
+        }
         let ringed = f.flags & emu_gfxstream::FENCE_FLAG_RING_IDX != 0;
         let timeline = if ringed { (f.ctx_id, f.ring_idx) } else { (0, 0) };
         let mut used = false;
@@ -475,7 +502,7 @@ impl Worker {
                     array_size: 1,
                     ..Default::default()
                 };
-                self.create(id, args, width, height, format)
+                self.create(h, id, args, width, height, format)
             }
             cmd::RESOURCE_CREATE_3D => {
                 let v: Vec<u32> = (0..11).map(|i| le32(req, 24 + i * 4)).collect();
@@ -492,7 +519,7 @@ impl Worker {
                     nr_samples: v[9],
                     flags: v[10],
                 };
-                self.create(v[0], args, v[4], v[5], v[2])
+                self.create(h, v[0], args, v[4], v[5], v[2])
             }
             cmd::RESOURCE_UNREF => {
                 let id = le32(req, 24);
@@ -616,8 +643,9 @@ impl Worker {
         }
     }
 
-    fn create(&mut self, id: u32, args: ResourceCreateArgs, width: u32, height: u32, format: u32) -> Vec<u8> {
-        let h = Hdr::default();
+    /// Every reply must echo the request's fence fields: the guest driver signals its fence
+    /// from the fence id in the response header.
+    fn create(&mut self, h: &Hdr, id: u32, args: ResourceCreateArgs, width: u32, height: u32, format: u32) -> Vec<u8> {
         match self.cfg.renderer.resource_create(args, &[]) {
             Ok(()) => {
                 self.resources.insert(id, Resource { width, height, format, mapped: None });

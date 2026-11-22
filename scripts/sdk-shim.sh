@@ -25,6 +25,8 @@ done
 # Keep the stock emulator's helper tools (e2fsck, resize2fs, ...) for tools that look for them;
 # emu-rs itself formats userdata natively and needs none of them.
 [ -d "$real/emulator/bin64" ] && ln -sfn "$real/emulator/bin64" "$shim/emulator/bin64"
+# Host rendering: the gfxstream renderer and its Vulkan loader/ICDs (MoltenVK, lavapipe).
+[ -d "$real/emulator/lib64" ] && ln -sfn "$real/emulator/lib64" "$shim/emulator/lib64"
 cp "$repo/target/release/emu" "$shim/emulator/emulator"
 codesign --sign - --force --entitlements "$repo/scripts/hypervisor.entitlements" "$shim/emulator/emulator"
 printf 'Pkg.Path=emulator\nPkg.Desc=emu-rs\nPkg.Revision=0.1.0\n' > "$shim/emulator/source.properties"

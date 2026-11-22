@@ -17,18 +17,50 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result};
 
-static INTERRUPTED: AtomicBool = AtomicBool::new(false);
-
-extern "C" fn on_signal(_: libc::c_int) {
-    INTERRUPTED.store(true, Ordering::SeqCst);
-}
-
+/// Blocks SIGINT/SIGTERM/SIGHUP in this thread (and so in every thread created after it,
+/// including native libraries' threads) and returns a receiver that fires once any of them
+/// arrives. A dedicated thread `sigwait`s for them, so a library that installs its own handlers
+/// (the GPU renderer does) can't swallow the shutdown signal.
 #[allow(unsafe_code)]
-fn install_signal_handlers() {
-    for sig in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
-        // SAFETY: the handler only stores to an atomic, which is async-signal-safe.
-        unsafe { libc::signal(sig, on_signal as *const () as libc::sighandler_t) };
-    }
+fn shutdown_signals() -> std::sync::mpsc::Receiver<i32> {
+    // SAFETY: plain libc signal-mask calls on a stack-allocated, initialized sigset.
+    let set = unsafe {
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut set);
+        for sig in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
+            libc::sigaddset(&mut set, sig);
+        }
+        libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut());
+        set
+    };
+    // Native libraries may set these signals to SIG_IGN (the GPU renderer does), and ignored
+    // signals are discarded even while blocked. Keep their disposition at SIG_DFL: blocked
+    // everywhere, the default action never runs, and sigwait receives them.
+    let _ = std::thread::Builder::new().name("signal-guard".into()).spawn(|| {
+        loop {
+            for sig in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
+                // SAFETY: querying and restoring a disposition with zero-initialized sigactions.
+                unsafe {
+                    let mut cur: libc::sigaction = std::mem::zeroed();
+                    if libc::sigaction(sig, std::ptr::null(), &mut cur) == 0 && cur.sa_sigaction != libc::SIG_DFL {
+                        let mut dfl: libc::sigaction = std::mem::zeroed();
+                        dfl.sa_sigaction = libc::SIG_DFL;
+                        libc::sigaction(sig, &dfl, std::ptr::null_mut());
+                    }
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+    });
+    let (tx, rx) = std::sync::mpsc::channel();
+    let _ = std::thread::Builder::new().name("signals".into()).spawn(move || {
+        let mut sig = 0;
+        // SAFETY: `set` is a valid sigset; sigwait writes the delivered signal number.
+        if unsafe { libc::sigwait(&set, &mut sig) } == 0 {
+            let _ = tx.send(sig);
+        }
+    });
+    rx
 }
 
 fn main() -> ExitCode {
@@ -63,6 +95,8 @@ fn create_avd(env: &emu_avd::Env, name: &str, sysdir: &str, opts: &args::Opts) -
 }
 
 fn real_main() -> Result<ExitCode> {
+    // First, before any thread exists.
+    let signals = shutdown_signals();
     // Internal: `emu -probe-vulkan <lib64>` (see vkprobe.rs).
     let raw: Vec<String> = std::env::args().collect();
     if raw.get(1).map(String::as_str) == Some("-probe-vulkan") {
@@ -108,17 +142,12 @@ fn real_main() -> Result<ExitCode> {
         eprintln!("emu: accepted but not implemented yet: {}", opts.ignored.join(" "));
     }
 
-    install_signal_handlers();
     let stop = Arc::new(AtomicBool::new(false));
     {
         let stop = stop.clone();
         std::thread::spawn(move || {
-            loop {
-                if INTERRUPTED.load(Ordering::SeqCst) {
-                    stop.store(true, Ordering::SeqCst);
-                    return;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(50));
+            if signals.recv().is_ok() {
+                stop.store(true, Ordering::SeqCst);
             }
         });
     }

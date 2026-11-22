@@ -36,6 +36,7 @@ pub struct Instance {
     pub clipboard: std::sync::Arc<emu_vmm::pipe::clipboard::Clipboard>,
     pub fingerprint: std::sync::Arc<emu_vmm::pipe::fingerprint::Fingerprint>,
     pub gps: std::sync::Arc<emu_vmm::pipe::gps::Gps>,
+    pub battery: std::sync::Arc<emu_vmm::devices::goldfish_battery::Battery>,
     _lock: Option<File>,
 }
 
@@ -130,6 +131,7 @@ impl Instance {
             clipboard: Default::default(),
             fingerprint: Default::default(),
             gps: Default::default(),
+            battery: Default::default(),
             _lock: lock,
         })
     }
@@ -153,11 +155,12 @@ impl Instance {
             // gfxstream over virtio-gpu: GLES through the pipe stream, Vulkan and ANGLE through
             // address-space graphics, both on the host renderer.
             bc.set("androidboot.hardware.gltransport", "virtio-gpu-asg").set("androidboot.hardware.vulkan", "ranchu");
-            // EMU_GUEST_EGL=angle: guest GLES through ANGLE on the guest's Vulkan, so every
-            // context uses address-space graphics instead of the blocking pipe stream.
-            if let Ok(egl) = std::env::var("EMU_GUEST_EGL") {
-                bc.set("androidboot.hardwareegl", egl);
-            }
+            // Guest GLES through ANGLE on the guest's Vulkan, so every context uses
+            // address-space graphics: with `emulation` GLES rides the virtio-gpu pipe stream,
+            // whose blocking reads serialize all processes on one queue (boots took 14–28 s with
+            // ANRs, against 5–8 s on ANGLE). EMU_GUEST_EGL=emulation restores it.
+            let egl = std::env::var("EMU_GUEST_EGL").unwrap_or_else(|_| "angle".into());
+            bc.set("androidboot.hardwareegl", egl);
         }
         if opts.no_boot_anim {
             bc.set("androidboot.debug.sf.nobootanimation", "1");
@@ -238,6 +241,7 @@ impl Instance {
             clipboard: self.clipboard.clone(),
             fingerprint: self.fingerprint.clone(),
             gps: self.gps.clone(),
+            battery: self.battery.clone(),
             on_guest_event: {
                 let started = std::time::Instant::now();
                 Some(std::sync::Arc::new(move |event: &str| {

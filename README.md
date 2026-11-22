@@ -16,10 +16,11 @@ to use fewer resources.
 | Storage | virtio-blk with indirect descriptors, event-idx, and discard/write-zeroes (hole punching). System and vendor are copy-on-write in memory; userdata, cache and metadata persist per AVD. Userdata is created by a native ext4 formatter (no `mkfs.ext4`) |
 | Boot | Full Android boot to `sys.boot_completed` in about 11–20 s on a warm boot (stock, cold: 51 s); first boot formats and encrypts `/data` |
 | adb | virtio-vsock with a host bridge on `console port + 1`, announced to the adb server. `adb shell`/`root`/`push` work, and the device shows up about 8 s after launch on a warm boot |
-| Console | `adb emu` / telnet console with token auth: `avd name`, `ping`, `kill`, `sensor set\|get\|status`, `event send\|text`, `touch`, `screenshot`, `frames` |
+| Console | `adb emu` / telnet console with token auth: `avd name`, `ping`, `kill`, `sensor set\|get\|status`, `event send\|text`, `geo fix`, `finger touch\|remove`, `power`, `rotate`, `screenshot`, plus emu-rs's `touch`, `clipboard`, `frames` |
 | Discovery | `-list-avds`, `pid_<pid>.ini` running-instance file, `emulator-<port>` serial on stdout |
-| Graphics | virtio-gpu with gfxstream contexts, rendered on the host GPU: GLES through ANGLE on Metal, Vulkan on MoltenVK (lavapipe fallback), Vulkan composition. Host-visible memory via blob mapping; goldfish address space (PCIe) and goldfish pipe for the ranchu gralloc |
-| Input & sensors | virtio-input touchscreen, keyboard and rotary; `qemud:sensors` with live values |
+| Graphics | Home screen and apps render. virtio-gpu with gfxstream contexts on the host GPU: GLES through ANGLE on Metal, Vulkan on MoltenVK (lavapipe fallback), Vulkan composition. Host-visible memory via blob mapping; goldfish address space (PCIe, shared-slot allocator) and goldfish pipe (refcounted color buffers) for the ranchu gralloc; guest `screencap` and host screenshots both work |
+| Input & sensors | virtio-input touchscreen, keyboard and rotary; `qemud:sensors` with live values; GNSS over `qemud:gps`; goldfish battery; fingerprint; clipboard |
+| AutoMobile | 22 of 27 harness tools pass; telephony (SMS, calls) waits on the modem |
 | Desktop app | Rune app (`desktop/`): AVD list, start/stop, live guest console |
 
 ## Quick start

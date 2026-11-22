@@ -18,6 +18,7 @@ pub struct ConsoleInfo {
     pub clipboard: Arc<emu_vmm::pipe::clipboard::Clipboard>,
     pub fingerprint: Arc<emu_vmm::pipe::fingerprint::Fingerprint>,
     pub gps: Arc<emu_vmm::pipe::gps::Gps>,
+    pub battery: Arc<emu_vmm::devices::goldfish_battery::Battery>,
 }
 
 /// `sensor set <name> <v[:v...]>` / `sensor get <name>` (stock syntax).
@@ -147,6 +148,81 @@ fn geo(info: &ConsoleInfo, words: &[&str]) -> String {
     }
 }
 
+/// `power display|ac on|off|status <s>|present true|false|health <h>|capacity <n>` (stock).
+fn power(info: &ConsoleInfo, words: &[&str]) -> String {
+    use emu_vmm::devices::goldfish_battery::{Health, Status};
+    let b = &info.battery;
+    match words {
+        ["display"] => {
+            let s = b.state();
+            let status = match s.status {
+                Status::Unknown => "Unknown",
+                Status::Charging => "Charging",
+                Status::Discharging => "Discharging",
+                Status::NotCharging => "Not charging",
+                Status::Full => "Full",
+            };
+            let health = match s.health {
+                Health::Unknown => "Unknown",
+                Health::Good => "Good",
+                Health::Overheat => "Overheat",
+                Health::Dead => "Dead",
+                Health::Overvoltage => "Overvoltage",
+                Health::Failure => "Unspecified failure",
+                Health::Cold => "Cold",
+            };
+            format!(
+                "AC: {}\r\nstatus: {status}\r\nhealth: {health}\r\npresent: {}\r\ncapacity: {}\r\nOK",
+                if s.ac_online { "online" } else { "offline" },
+                s.present,
+                s.capacity
+            )
+        }
+        ["ac", v @ ("on" | "off")] => {
+            b.update(|s| s.ac_online = *v == "on");
+            "OK".into()
+        }
+        ["status", v] => {
+            let st = match *v {
+                "unknown" => Status::Unknown,
+                "charging" => Status::Charging,
+                "discharging" => Status::Discharging,
+                "not-charging" => Status::NotCharging,
+                "full" => Status::Full,
+                _ => return "KO: Usage: \"status unknown|charging|discharging|not-charging|full\"".into(),
+            };
+            b.update(|s| s.status = st);
+            "OK".into()
+        }
+        ["present", v @ ("true" | "false")] => {
+            b.update(|s| s.present = *v == "true");
+            "OK".into()
+        }
+        ["health", v] => {
+            let h = match *v {
+                "unknown" => Health::Unknown,
+                "good" => Health::Good,
+                "overheat" => Health::Overheat,
+                "dead" => Health::Dead,
+                "overvoltage" => Health::Overvoltage,
+                "failure" => Health::Failure,
+                "cold" => Health::Cold,
+                _ => return "KO: Usage: \"health unknown|good|overheat|dead|overvoltage|failure|cold\"".into(),
+            };
+            b.update(|s| s.health = h);
+            "OK".into()
+        }
+        ["capacity", v] => match v.parse::<u32>() {
+            Ok(n) if n <= 100 => {
+                b.update(|s| s.capacity = n);
+                "OK".into()
+            }
+            _ => "KO: Usage: \"capacity <percentage>\"".into(),
+        },
+        _ => "KO: Usage: power display|ac on|off|status <state>|present true|false|health <state>|capacity <n>".into(),
+    }
+}
+
 /// Commands this console implements (stock names first, then emu-rs extensions).
 const HELP: &[(&str, &str)] = &[
     ("help|h|?", "print a list of commands"),
@@ -156,6 +232,8 @@ const HELP: &[(&str, &str)] = &[
     ("avd", "control virtual device execution"),
     ("finger", "manage emulator fingerprint"),
     ("geo", "Geo-location commands"),
+    ("power", "power related commands"),
+    ("rotate", "rotate the screen clockwise by 90 degrees"),
     ("ping", "check if the emulator is alive"),
     ("sensor", "manage emulator sensors"),
     ("screenshot", "take a screenshot of the display"),
@@ -246,6 +324,17 @@ fn session(stream: TcpStream, info: &ConsoleInfo) -> std::io::Result<()> {
             ("event", true) => event(info, &words[1..]),
             ("sensor", true) => sensor(info, &words[1..]),
             ("geo", true) => geo(info, &words[1..]),
+            ("power", true) => power(info, &words[1..]),
+            // Stock: rotate the device 90° clockwise. Gravity in device coordinates turns the
+            // other way, and the guest's auto-rotation follows the accelerometer.
+            ("rotate", true) => match info.sensors.get("acceleration").as_deref() {
+                Some(&[x, y, z]) => {
+                    info.sensors.set("acceleration", vec![-y + 0.0, x + 0.0, z]);
+                    info.sensors.set("acceleration-uncalibrated", vec![-y + 0.0, x + 0.0, z]);
+                    "OK".into()
+                }
+                _ => "KO: no accelerometer".into(),
+            },
             ("finger", true) => match (words.get(1).copied(), words.get(2).and_then(|v| v.parse::<u32>().ok())) {
                 (Some("touch"), Some(id)) if id > 0 => {
                     info.fingerprint.touch(id);

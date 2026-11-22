@@ -9,7 +9,20 @@ userdata creation, running-instance advertisement. Java-free provisioning in the
 (`emu -provision`, `-list-images`; `crates/emu-sdk`): manifest resolution, resumable verified
 download, unzip and AVD creation, replacing the old shell and Python scripts.
 
-## 2. Boot to home screen (graphics) — next
+## 2. Boot to home screen (graphics) — done
+
+Done 2026-11-22. What it took, beyond the plan below: color buffer lifetimes follow the guest's
+`refcount` pipes (RefCountPipe, released through `FrameBuffer::onLastColorBufferRef`); gralloc CPU
+reads go by DMA into shared-slot address-space memory, resolved through the renderer's exported
+`set_gfxstream_dma_get_host_addr`; ANGLE must run on Metal (`ANGLE_DEFAULT_PLATFORM=metal`; its
+CGL backend hangs creating a display context); composition stays in Vulkan (GL composition
+deadlocks SurfaceFlinger) and host screenshots sync the posted buffer from Vulkan to GL before
+reading it. Guest GLES uses the virtio-gpu pipe stream (`ro.hardware.egl=emulation`), whose
+blocking reads serialize all contexts on the one control queue, so emu-rs boots the guest with
+`ro.hardware.egl=angle` (address-space graphics everywhere): warm boots went from 14–28 s with
+boot-time ANRs to 5–8 s. `EMU_GUEST_EGL=emulation` restores the pipe stream.
+
+Original plan:
 
 SurfaceFlinger needs a host renderer. Two routes, both backed by gfxstream:
 

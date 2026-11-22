@@ -120,6 +120,12 @@ pub fn build(b: &BoardInfo) -> Result<Vec<u8>, emu_fdt::FdtError> {
         f.end_node();
     }
 
+    f.begin_node(&format!("goldfish_battery@{GOLDFISH_BATTERY_BASE:x}"));
+    f.prop_str("compatible", "google,goldfish-battery");
+    f.prop_reg("reg", &[(GOLDFISH_BATTERY_BASE, PERIPH_SIZE)]);
+    f.prop_cells("interrupts", &[GIC_SPI, GOLDFISH_BATTERY_SPI, IRQ_TYPE_LEVEL_HIGH]);
+    f.end_node();
+
     if b.goldfish_pipe {
         f.begin_node(&format!("goldfish_pipe@{GOLDFISH_PIPE_BASE:x}"));
         f.prop_strs("compatible", &["google,android-pipe", "generic,android-pipe"]);
@@ -214,5 +220,6 @@ mod tests {
         assert!(text.contains("virtio_mmio@a003600"));
         assert!(text.contains("arm,gic-v3"));
         assert!(text.contains("pci-host-ecam-generic"));
+        assert!(text.contains("google,goldfish-battery"));
     }
 }

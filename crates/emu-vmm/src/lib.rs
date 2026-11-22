@@ -147,6 +147,8 @@ pub struct MachineConfig {
     pub fingerprint: Arc<pipe::fingerprint::Fingerprint>,
     /// GNSS position (console `geo fix`), streamed over `qemud:gps`.
     pub gps: Arc<pipe::gps::Gps>,
+    /// Battery and AC state (console `power`).
+    pub battery: Arc<devices::goldfish_battery::Battery>,
     /// Touchscreen size; enables the virtio-input touchscreen, keyboard and rotary devices.
     pub input: Option<(u32, u32)>,
     /// Receives the input handles of this run (they change when the guest reboots).
@@ -254,6 +256,11 @@ pub fn run(cfg: MachineConfig, stop: Arc<AtomicBool>) -> Result<Outcome> {
     }
     bus.insert(UART_BASE, PERIPH_SIZE, Arc::new(devices::pl011::Pl011::new(spi(UART_SPI), cfg.console)));
     bus.insert(RTC_BASE, PERIPH_SIZE, Arc::new(devices::pl031::Pl031::default()));
+    bus.insert(
+        GOLDFISH_BATTERY_BASE,
+        PERIPH_SIZE,
+        Arc::new(devices::goldfish_battery::GoldfishBattery::new(cfg.battery.clone(), spi(GOLDFISH_BATTERY_SPI))),
+    );
     let mut slots: Vec<Option<Box<dyn virtio::VirtioDevice>>> = (0..VIRTIO_MMIO_SLOTS).map(|_| None).collect();
     for d in &cfg.disks {
         let disk = match d.mode {

@@ -128,8 +128,14 @@ impl Avd {
     }
 
     /// Guest RAM in bytes (`hw.ramSize`, which accepts `2048`, `2048M` or `2G`).
+    ///
+    /// Below 1 GB the stock launcher's 512 MB of padding is added: current Wear images are
+    /// configured with 512 MB and the OOM killer takes `system_server` and adbd without it.
+    /// Guest RAM is committed lazily, so the padding costs host memory only if it's used.
     pub fn ram_bytes(&self) -> u64 {
-        self.get("hw.ramSize").and_then(parse_size_mb).unwrap_or(2048) * 1024 * 1024
+        let mb = self.get("hw.ramSize").and_then(parse_size_mb).unwrap_or(2048);
+        let mb = if mb < 1024 { mb + 512 } else { mb };
+        mb * 1024 * 1024
     }
 
     pub fn data_partition_bytes(&self) -> u64 {
@@ -306,6 +312,9 @@ mod tests {
         let avd = env.load("pixel").expect("load");
         assert_eq!(avd.cpus(), 4);
         assert_eq!(avd.ram_bytes(), 2 << 30);
+        let mut small = avd.clone();
+        small.config.insert("hw.ramSize".into(), "512".into());
+        assert_eq!(small.ram_bytes(), 1 << 30, "stock pads small devices by 512 MB");
         assert_eq!(avd.api_level(), Some(36));
         assert!(env.load("nope").is_err());
 

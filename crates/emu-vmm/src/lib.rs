@@ -65,9 +65,15 @@ pub struct GpuSpec {
     pub display: Arc<dyn virtio::gpu::DisplaySink>,
 }
 
+static RENDERER: std::sync::OnceLock<Arc<emu_gfxstream::Renderer>> = std::sync::OnceLock::new();
+
+/// The last frame the renderer posted, `width` x `height` RGBA, read by the renderer.
+pub fn renderer_screenshot(width: u32, height: u32) -> Option<Vec<u8>> {
+    RENDERER.get()?.read_last_posted(width, height).ok()
+}
+
 /// The renderer is process-wide: loaded and initialized once, reused across guest reboots.
 fn renderer(spec: &GpuSpec) -> Result<Arc<emu_gfxstream::Renderer>> {
-    static RENDERER: std::sync::OnceLock<Arc<emu_gfxstream::Renderer>> = std::sync::OnceLock::new();
     if let Some(r) = RENDERER.get() {
         return Ok(r.clone());
     }

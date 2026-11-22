@@ -658,6 +658,43 @@ impl Renderer {
 
 type OnLastColorBufferRef = unsafe extern "C" fn(*mut c_void, u32);
 
+type GetLastPosted = unsafe extern "C" fn(*mut c_void) -> u32;
+type FlushFromVk = unsafe extern "C" fn(*mut c_void, u32) -> bool;
+type ReadColorBuffer = unsafe extern "C" fn(*mut c_void, u32, i32, i32, i32, i32, u32, *mut c_void, u64);
+
+/// `GfxstreamFormat::R8G8B8A8_UNORM`.
+const GFXSTREAM_RGBA8: u32 = 1;
+
+impl Renderer {
+    /// The last color buffer the renderer posted (host composition's output), read back as
+    /// RGBA, `width` x `height`, top row first. Composition runs in Vulkan, and reads go
+    /// through GL, so the Vulkan image is synced to GL first; the renderer's own readback
+    /// paths (post callback, `getScreenshot`) skip that and return stale or garbage pixels.
+    pub fn read_last_posted(&self, width: u32, height: u32) -> Result<Vec<u8>> {
+        let h = self.handle;
+        let get_fb: GetFb = sym!(h, "_ZN9gfxstream4host11FrameBuffer5getFBEv");
+        let last: GetLastPosted = sym!(h, "_ZN9gfxstream4host11FrameBuffer24getLastPostedColorBufferEv");
+        let flush: FlushFromVk = sym!(h, "_ZN9gfxstream4host11FrameBuffer22flushColorBufferFromVkEj");
+        let read: ReadColorBuffer = sym!(h, "_ZN9gfxstream4host11FrameBuffer15readColorBufferEjiiiiNS0_15GfxstreamFormatEPvy");
+        let mut px = vec![0u8; width as usize * height as usize * 4];
+        // SAFETY: member functions with `this` first (Itanium ABI); readColorBuffer writes at
+        // most the size we pass.
+        unsafe {
+            let fb = get_fb();
+            if fb.is_null() {
+                return Err(Error::Call("FrameBuffer::getFB", 0));
+            }
+            let cb = last(fb);
+            if cb == 0 {
+                return Err(Error::Call("FrameBuffer::getLastPostedColorBuffer", 0));
+            }
+            flush(fb, cb);
+            read(fb, cb, 0, 0, width as i32, height as i32, GFXSTREAM_RGBA8, px.as_mut_ptr().cast(), px.len() as u64);
+        }
+        Ok(px)
+    }
+}
+
 impl Renderer {
     /// Frees color buffer `handle` once its last guest reference is gone (the guest's
     /// `refcount` pipe closed). Needs the RefCountPipe feature, under which consumers' explicit

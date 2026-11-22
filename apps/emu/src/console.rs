@@ -113,10 +113,13 @@ fn screenshot(info: &ConsoleInfo, path: Option<&str>) -> String {
     if f.frames == 0 {
         return "KO: no frame presented yet".into();
     }
-    let rgba = crate::png::to_rgba(f.width, f.height, f.stride, f.format, &f.pixels);
+    // The renderer's own capture of the last posted frame; the post-callback copy is the fallback.
+    let (width, height) = (f.width, f.height);
+    let rgba = emu_vmm::renderer_screenshot(width, height)
+        .unwrap_or_else(|| crate::png::to_rgba(f.width, f.height, f.stride, f.format, &f.pixels));
     let path = path.map(PathBuf::from).unwrap_or_else(|| std::env::temp_dir().join(format!("emu-rs-{}.png", std::process::id())));
-    match crate::png::encode(f.width, f.height, &rgba).and_then(|png| std::fs::write(&path, png)) {
-        Ok(()) => format!("{} ({}x{}, frame {})\r\nOK", path.display(), f.width, f.height, f.frames),
+    match crate::png::encode(width, height, &rgba).and_then(|png| std::fs::write(&path, png)) {
+        Ok(()) => format!("{} ({}x{}, frame {})\r\nOK", path.display(), width, height, f.frames),
         Err(e) => format!("KO: {e}"),
     }
 }

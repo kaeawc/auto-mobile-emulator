@@ -88,9 +88,14 @@ impl Instance {
             && let Some(emulator_dir) = lib64.parent()
         {
             let icd = match opts.gpu.as_deref() {
-                Some("swiftshader" | "swiftshader_indirect") => Some("swiftshader"),
-                Some("lavapipe") => Some("lavapipe"),
-                _ => None,
+                Some("swiftshader" | "swiftshader_indirect") => emu_gfxstream::Icd::SwiftShader,
+                Some("lavapipe" | "swangle") => emu_gfxstream::Icd::Lavapipe,
+                // MoltenVK (host GPU) unless it fails on this machine; then software.
+                _ if crate::vkprobe::moltenvk_works(lib64) => emu_gfxstream::Icd::MoltenVk,
+                _ => {
+                    eprintln!("emu: MoltenVK unavailable here; using lavapipe (software Vulkan)");
+                    emu_gfxstream::Icd::Lavapipe
+                }
             };
             link_lib64_beside_exe(lib64);
             emu_gfxstream::configure_environment(emulator_dir, icd);

@@ -9,6 +9,7 @@ mod console;
 mod instance;
 mod png;
 mod provision;
+mod vkprobe;
 
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -62,6 +63,12 @@ fn create_avd(env: &emu_avd::Env, name: &str, sysdir: &str, opts: &args::Opts) -
 }
 
 fn real_main() -> Result<ExitCode> {
+    // Internal: `emu -probe-vulkan <lib64>` (see vkprobe.rs).
+    let raw: Vec<String> = std::env::args().collect();
+    if raw.get(1).map(String::as_str) == Some("-probe-vulkan") {
+        let ok = raw.get(2).is_some_and(|p| vkprobe::probe(std::path::Path::new(p)));
+        return Ok(if ok { ExitCode::SUCCESS } else { ExitCode::FAILURE });
+    }
     let opts = args::parse(std::env::args().skip(1))?;
     let env = emu_avd::Env::from_env();
 

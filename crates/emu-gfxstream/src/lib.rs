@@ -221,6 +221,9 @@ extern "C" fn on_debug(_: *mut c_void, d: *mut Debug) {
     }
     // SAFETY: valid for the duration of the call; message is NUL-terminated.
     let (kind, msg) = unsafe { ((*d).debug_type, std::ffi::CStr::from_ptr((*d).message).to_string_lossy().into_owned()) };
+    if msg.contains("Failed to initialize global Vulkan emulation") {
+        VULKAN_FAILED.store(true, Ordering::Relaxed);
+    }
     // 1 error, 2 warn, 3 info, 4 debug.
     if kind <= 2 || (kind == 3 && VERBOSE.load(Ordering::Relaxed)) {
         eprintln!("gfxstream: {}", msg.trim_end());
@@ -430,20 +433,60 @@ fn on_debug_ptr() -> u64 {
     on_debug as DebugCb as usize as u64
 }
 
+/// Host Vulkan driver for the renderer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Icd {
+    /// Metal, on the host GPU.
+    MoltenVk,
+    /// Software (llvmpipe); always works, uses CPU.
+    Lavapipe,
+    SwiftShader,
+}
+
+impl Icd {
+    pub fn manifest(self) -> &'static str {
+        match self {
+            Icd::MoltenVk => "MoltenVK_icd.json",
+            Icd::Lavapipe => "lvp_icd.json",
+            Icd::SwiftShader => "vk_swiftshader_icd.json",
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Icd::MoltenVk => "moltenvk",
+            Icd::Lavapipe => "lavapipe",
+            Icd::SwiftShader => "swiftshader",
+        }
+    }
+}
+
+/// Whether the renderer brought up Vulkan (false after "Failed to initialize global Vulkan").
+pub fn vulkan_ok() -> bool {
+    !VULKAN_FAILED.load(Ordering::Relaxed)
+}
+
+static VULKAN_FAILED: AtomicBool = AtomicBool::new(false);
+
 /// Points the renderer at the SDK's Vulkan loader and ICDs (MoltenVK by default). gfxstream
 /// resolves `lib64/vulkan/*` relative to its "launcher directory", which defaults to the
 /// executable's directory; set it to the SDK's `emulator/`.
 ///
 /// Call before spawning threads that might read the environment.
-pub fn configure_environment(emulator_dir: &Path, icd: Option<&str>) {
-    let loader = emulator_dir.join("lib64/vulkan/libvulkan.dylib");
+pub fn configure_environment(emulator_dir: &Path, icd: Icd) {
+    let vk = emulator_dir.join("lib64/vulkan");
+    let loader = vk.join("libvulkan.dylib");
     let mut vars = vec![("ANDROID_EMULATOR_LAUNCHER_DIR", emulator_dir.as_os_str().to_owned())];
     if loader.is_file() {
         vars.push(("ANDROID_EMU_VK_LOADER_PATH", loader.into_os_string()));
     }
-    if let Some(icd) = icd {
-        vars.push(("ANDROID_EMU_VK_ICD", icd.into()));
+    // The loader otherwise searches only system ICD directories (found empty on macOS).
+    let manifest = vk.join(icd.manifest());
+    if manifest.is_file() {
+        vars.push(("VK_DRIVER_FILES", manifest.clone().into_os_string()));
+        vars.push(("VK_ICD_FILENAMES", manifest.into_os_string()));
     }
+    vars.push(("ANDROID_EMU_VK_ICD", icd.name().into()));
     for (k, v) in vars {
         if std::env::var_os(k).is_none() {
             // SAFETY: documented precondition: called while the process is single-threaded

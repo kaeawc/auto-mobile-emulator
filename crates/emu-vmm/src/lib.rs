@@ -92,6 +92,8 @@ pub struct MachineConfig {
     pub gpu: Option<GpuSpec>,
     /// Served to the guest's `qemu-props` over the `qemud:boot-properties` pipe.
     pub boot_props: Vec<(String, String)>,
+    /// Live sensor values (served over `qemud:sensors`, changed by the console).
+    pub sensors: Arc<pipe::sensors::Sensors>,
     /// Touchscreen size; enables the virtio-input touchscreen, keyboard and rotary devices.
     pub input: Option<(u32, u32)>,
     /// Receives the input handles of this run (they change when the guest reboots).
@@ -244,6 +246,7 @@ pub fn run(cfg: MachineConfig, stop: Arc<AtomicBool>) -> Result<Outcome> {
         registry.register("qemud:adb", Box::new(svc));
         registry.register("qemud:boot-properties", Box::new(pipe::qemud::BootProperties { props: cfg.boot_props.clone() }));
         registry.register("refcount", Box::new(devices::goldfish_pipe::RefCount));
+        registry.register("qemud:sensors", Box::new(pipe::sensors::SensorService { sensors: cfg.sensors.clone() }));
         registry.register("GLProcessPipe", Box::new(devices::goldfish_pipe::GlProcess::default()));
         let registry = Arc::new(registry);
         // Graphics pipes never use vsock; they need the goldfish pipe device.

@@ -30,6 +30,8 @@ pub struct Instance {
     gpu_lib64: Option<PathBuf>,
     /// Input handles of the current run, for the console and desktop.
     pub inputs: std::sync::Arc<std::sync::Mutex<Option<emu_vmm::Inputs>>>,
+    /// Sensor values, shared by the guest's sensors HAL and the console.
+    pub sensors: std::sync::Arc<emu_vmm::pipe::sensors::Sensors>,
     _lock: Option<File>,
 }
 
@@ -109,6 +111,7 @@ impl Instance {
             display,
             gpu_lib64,
             inputs: Default::default(),
+            sensors: Default::default(),
             _lock: lock,
         })
     }
@@ -208,6 +211,7 @@ impl Instance {
             }),
             boot_props: self.boot_props(),
             input: Some((self.avd.lcd().0, self.avd.lcd().1)),
+            sensors: self.sensors.clone(),
             on_input: {
                 let slot = self.inputs.clone();
                 Some(std::sync::Arc::new(move |i| *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(i)))

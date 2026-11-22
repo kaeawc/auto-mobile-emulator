@@ -14,6 +14,36 @@ pub struct ConsoleInfo {
     pub stop: Arc<AtomicBool>,
     pub display: Option<Arc<emu_vmm::virtio::gpu::FrameStore>>,
     pub inputs: Arc<std::sync::Mutex<Option<emu_vmm::Inputs>>>,
+    pub sensors: Arc<emu_vmm::pipe::sensors::Sensors>,
+}
+
+/// `sensor set <name> <v[:v...]>` / `sensor get <name>` (stock syntax).
+fn sensor(info: &ConsoleInfo, words: &[&str]) -> String {
+    match words {
+        ["get", name] => match info.sensors.get(name) {
+            Some(v) => format!("{name} = {}\r\nOK", v.iter().map(|x| format!("{x}")).collect::<Vec<_>>().join(":")),
+            None => format!("KO: unknown sensor '{name}'"),
+        },
+        ["set", name, values] => {
+            let parsed: Result<Vec<f32>, _> = values.split(':').map(str::parse).collect();
+            match parsed {
+                Ok(v) => {
+                    if info.sensors.set(name, v) {
+                        "OK".into()
+                    } else {
+                        format!("KO: bad sensor '{name}' or value count")
+                    }
+                }
+                Err(_) => format!("KO: bad values '{values}'"),
+            }
+        }
+        ["status"] => {
+            let names: Vec<&str> =
+                emu_vmm::pipe::sensors::NAMES.iter().copied().filter(|n| !n.is_empty() && info.sensors.get(n).is_some()).collect();
+            format!("{}\r\nOK", names.iter().map(|n| format!("{n}: enabled.")).collect::<Vec<_>>().join("\r\n"))
+        }
+        _ => "KO: usage: sensor set <name> <v:v:v> | sensor get <name> | sensor status".into(),
+    }
 }
 
 /// `event send <type>:<code>:<value> ...` (stock syntax, e.g. `EV_KEY:KEY_POWER:1`,
@@ -165,6 +195,7 @@ fn session(stream: TcpStream, info: &ConsoleInfo) -> std::io::Result<()> {
             ("ping", true) => "I am alive!\r\nOK".to_string(),
             ("screenshot", true) => screenshot(info, words.get(1).copied()),
             ("event", true) => event(info, &words[1..]),
+            ("sensor", true) => sensor(info, &words[1..]),
             ("touch", true) => {
                 // emu-rs extension: `touch <x> <y> [down|up|tap]` in device pixels.
                 let g = info.inputs.lock().unwrap_or_else(|e| e.into_inner());

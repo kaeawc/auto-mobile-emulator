@@ -127,7 +127,13 @@ fn real_main() -> Result<ExitCode> {
     let inst = instance::Instance::prepare(&avd, &opts)?;
     console::serve(
         inst.console_port,
-        console::ConsoleInfo { avd_name: avd.name.clone(), stop: stop.clone(), display: inst.display.clone(), inputs: inst.inputs.clone() },
+        console::ConsoleInfo {
+            avd_name: avd.name.clone(),
+            stop: stop.clone(),
+            display: inst.display.clone(),
+            inputs: inst.inputs.clone(),
+            sensors: inst.sensors.clone(),
+        },
     )?;
     let _advert = console::Advertisement::write(&avd.name, &avd.dir, inst.console_port);
     // On stdout: launchers watch for the first line and the `emulator-<port>` serial.

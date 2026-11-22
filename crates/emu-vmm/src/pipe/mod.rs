@@ -5,6 +5,7 @@
 //! service. `qemud:adb` is adbd's transport; others (boot properties, sensors, ...) follow.
 pub mod adb;
 pub mod qemud;
+pub mod sensors;
 
 use std::net::TcpStream;
 use std::sync::mpsc::Sender;

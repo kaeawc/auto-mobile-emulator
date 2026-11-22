@@ -55,7 +55,7 @@ and run its tools one by one, fixing whatever breaks:
 - Snapshots: save and restore guest RAM and device state. Copy-on-write RAM files make restore
   near-instant.
 - virtio-balloon free-page reporting, so idle guests hand memory back to the host.
-- `DISCARD`/`WRITE_ZEROES` with `F_PUNCHHOLE`, keeping userdata sparse.
+- ~~`DISCARD`/`WRITE_ZEROES` with `F_PUNCHHOLE`, keeping userdata sparse.~~ Done.
 - Native ext4 formatter, removing the dependency on the SDK's `mkfs.ext4`. This matters for the
   Java-free path (`scripts/provision.sh`), which installs no emulator package and so has no
   bundled `mkfs.ext4`; until then it needs e2fsprogs.

@@ -5,7 +5,9 @@ Each milestone ends with a check against a real harness: first adb, then AutoMob
 ## 1. Boot to adb — done
 
 VM core, stock board layout, virtio-blk/rng/vsock, adb bridge, console basics, first-boot
-userdata creation, running-instance advertisement.
+userdata creation, running-instance advertisement. Java-free provisioning in the binary
+(`emu -provision`, `-list-images`; `crates/emu-sdk`): manifest resolution, resumable verified
+download, unzip and AVD creation, replacing the old shell and Python scripts.
 
 ## 2. Boot to home screen (graphics) — next
 
@@ -57,10 +59,8 @@ and run its tools one by one, fixing whatever breaks:
 - virtio-balloon free-page reporting, so idle guests hand memory back to the host.
 - `DISCARD`/`WRITE_ZEROES` with `F_PUNCHHOLE`, keeping userdata sparse.
 - Native ext4 formatter, removing the dependency on the SDK's `mkfs.ext4`. This matters for the
-  Java-free path (`scripts/provision.sh`), which installs no emulator package and so has no
+  Java-free path (`emu -provision`), which installs no emulator package and so has no
   bundled `mkfs.ext4`; until then it needs e2fsprogs.
-- `emu provision` in Rust, replacing `scripts/provision.sh` + `sdk-resolve.py`: manifest
-  resolution, verified download, unzip, AVD creation in one binary.
 - qcow2 read/write, to share AVD state with the stock emulator.
 - Multi-instance density: shared read-only image pages and a smaller per-instance footprint.
 - Debugging tools in the desktop app: exit and IRQ counters, frame timing, guest console and

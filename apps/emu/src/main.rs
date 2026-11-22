@@ -7,6 +7,7 @@
 mod args;
 mod console;
 mod instance;
+mod provision;
 
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -38,6 +39,27 @@ fn main() -> ExitCode {
     }
 }
 
+/// `-create-avd`: writes the AVD with the requested hardware, warning if its image is missing.
+fn create_avd(env: &emu_avd::Env, name: &str, sysdir: &str, opts: &args::Opts) -> Result<()> {
+    let mut spec = emu_avd::NewAvd::new(name, sysdir);
+    if let Some(lcd) = opts.lcd {
+        spec.lcd = lcd;
+    }
+    if let Some(c) = opts.cores {
+        spec.cores = c;
+    }
+    if let Some(m) = opts.memory_mb {
+        spec.ram_mb = m;
+    }
+    let dir = env.create_avd(&spec)?;
+    // Fail now, not at first boot, if the image isn't installed.
+    if let Err(e) = env.load(name) {
+        eprintln!("emu: warning: {e} (install it with emu -provision <api>)");
+    }
+    println!("created {name} at {}", dir.display());
+    Ok(())
+}
+
 fn real_main() -> Result<ExitCode> {
     let opts = args::parse(std::env::args().skip(1))?;
     let env = emu_avd::Env::from_env();
@@ -56,24 +78,17 @@ fn real_main() -> Result<ExitCode> {
         }
         return Ok(ExitCode::SUCCESS);
     }
+    if opts.list_images {
+        provision::list_images(&env, &opts)?;
+        return Ok(ExitCode::SUCCESS);
+    }
+    if let Some(api) = &opts.provision {
+        provision::provision(&env, api, &opts)?;
+        return Ok(ExitCode::SUCCESS);
+    }
     if let Some(name) = &opts.create_avd {
         let sysdir = opts.sysdir.clone().context("-create-avd needs -sysdir system-images/<target>/<tag>/<abi>")?;
-        let mut spec = emu_avd::NewAvd::new(name, &sysdir);
-        if let Some(lcd) = opts.lcd {
-            spec.lcd = lcd;
-        }
-        if let Some(c) = opts.cores {
-            spec.cores = c;
-        }
-        if let Some(m) = opts.memory_mb {
-            spec.ram_mb = m;
-        }
-        let dir = env.create_avd(&spec)?;
-        // Fail now, not at first boot, if the image isn't installed.
-        if let Err(e) = env.load(name) {
-            eprintln!("emu: warning: {e} (install it with scripts/provision.sh)");
-        }
-        println!("created {name} at {}", dir.display());
+        create_avd(&env, name, &sysdir, &opts)?;
         return Ok(ExitCode::SUCCESS);
     }
     if opts.accel_check {

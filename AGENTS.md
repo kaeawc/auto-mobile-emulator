@@ -41,6 +41,9 @@ check `adb -s emulator-5554 shell getprop sys.boot_completed`.
   wakers), `bus.rs`, `devices/` (PL011, PL031), `virtio/` (mmio transport, queue, blk, rng,
   vsock), `pipe/` (adb bridge, qemud services), `disk.rs`, `boot.rs`.
 - `crates/emu-avd` — `Env` (SDK/AVD paths), `Avd`, `BootConfig`, ini parsing.
+- `crates/emu-sdk` — Java-free provisioning: `manifest.rs` (repository XML, stable/host
+  resolution), `Sdk` (cached manifests, curl download, sha1 verify, unzip into place).
 - `apps/emu` — `args.rs` (SDK emulator flags), `instance.rs` (disks, bootconfig, boot props),
-  `console.rs` (console server, running-instance file).
+  `console.rs` (console server, running-instance file), `provision.rs` (`-provision`,
+  `-list-images`).
 - `desktop/` — Rune app: `backend.rs`, `view.rs`, `main.rs` (state, actions, poll, tests).

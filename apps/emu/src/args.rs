@@ -6,6 +6,15 @@ usage: emu -avd NAME [options]
        emu @NAME [options]
        emu -list-avds | -version | -accel-check
        emu -create-avd NAME -sysdir system-images/android-36/google_apis/arm64-v8a [-lcd 720x1280@320] [-cores N] [-memory MB]
+       emu -provision API [-tag google_apis] [-abi arm64-v8a] [-dry-run] [-create-avd NAME [-lcd WxH@DPI] [-cores N] [-memory MB]]
+       emu -list-images [-tag TAG] [-abi arm64-v8a]
+
+provisioning (no Java or sdkmanager; SDK at $ANDROID_HOME, default ~/Library/Android/sdk):
+  -provision API    install platform-tools and system-images;android-API;TAG;ABI (API: 36, 36.1, ...)
+  -tag TAG          default, google_apis (default), google_apis_playstore, android-wear, ...
+  -abi ABI          default arm64-v8a
+  -dry-run          resolve and print URL, size and sha1 without downloading
+  -list-images      system images available for this host (all tags unless -tag)
 
 options:
   -cores N          vCPUs (default: hw.cpu.ncore)
@@ -87,6 +96,12 @@ pub struct Opts {
     pub sysdir: Option<String>,
     /// WxH@DPI
     pub lcd: Option<(u32, u32, u32)>,
+    /// `-provision API`: install platform-tools and a system image.
+    pub provision: Option<String>,
+    pub list_images: bool,
+    pub tag: Option<String>,
+    pub abi: Option<String>,
+    pub dry_run: bool,
     /// Flags accepted for compatibility but not implemented.
     pub ignored: Vec<String>,
 }
@@ -121,6 +136,11 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts> {
             "create-avd" => o.create_avd = Some(value(flag)?),
             "sysdir" => o.sysdir = Some(value(flag)?),
             "lcd" => o.lcd = Some(parse_lcd(&value(flag)?)?),
+            "provision" => o.provision = Some(value(flag)?),
+            "list-images" => o.list_images = true,
+            "tag" => o.tag = Some(value(flag)?),
+            "abi" => o.abi = Some(value(flag)?),
+            "dry-run" => o.dry_run = true,
             // Everything after -qemu belongs to QEMU, which we aren't.
             "qemu" => {
                 let rest: Vec<String> = it.by_ref().collect();
@@ -174,6 +194,24 @@ mod tests {
         assert_eq!(o.create_avd.as_deref(), Some("small"));
         assert_eq!(o.lcd, Some((480, 800, 240)));
         assert!(parse_lcd("480").is_err());
+    }
+
+    #[test]
+    fn provision_flags() {
+        let o =
+            p("-provision 36 -tag google_apis_playstore -abi arm64-v8a -create-avd play36 -lcd 480x800@240 -cores 2 -memory 1536 -dry-run");
+        assert_eq!(o.provision.as_deref(), Some("36"));
+        assert_eq!(o.tag.as_deref(), Some("google_apis_playstore"));
+        assert_eq!(o.abi.as_deref(), Some("arm64-v8a"));
+        assert_eq!(o.create_avd.as_deref(), Some("play36"));
+        assert_eq!((o.lcd, o.cores, o.memory_mb), (Some((480, 800, 240)), Some(2), Some(1536)));
+        assert!(o.dry_run && !o.list_images && o.ignored.is_empty());
+
+        let o = p("-list-images -tag android-tv");
+        assert!(o.list_images && o.provision.is_none());
+        assert_eq!(o.tag.as_deref(), Some("android-tv"));
+        assert!(parse(["-provision".to_string()]).is_err());
+        assert!(parse(["-list-images".to_string(), "-tag".to_string()]).is_err());
     }
 
     #[test]

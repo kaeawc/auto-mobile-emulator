@@ -1,14 +1,15 @@
 //! emu-rs desktop: pick an AVD, start or stop it, watch its console.
 //!
 //! Handlers only queue [`Action`]s; `poll` performs them, so the headless tests below drive the
-//! real view without launching anything. The device display pane arrives with the virtio-gpu
-//! milestone; until then the right pane shows the guest's console log.
+//! real view without launching anything. A running instance's screen streams into the detail
+//! pane (`screen.rs`), with touch and the Home/Back/Power keys going back to it.
 //!
 //! `cargo run` opens the window; `cargo run -- --snap panel.png --scene demo` renders headless.
 
 #![forbid(unsafe_code)]
 
 mod backend;
+mod screen;
 mod view;
 
 use backend::AvdRow;
@@ -33,6 +34,9 @@ pub struct State {
     pub offline: bool,
     scan: Latest<Vec<AvdRow>>,
     next_refresh: f64,
+    /// The selected running instance's screen.
+    pub screen: Option<screen::Screen>,
+    next_connect: f64,
 }
 
 impl State {
@@ -51,6 +55,8 @@ fn init() -> State {
         offline: false,
         scan: Latest::default(),
         next_refresh: 0.0,
+        screen: None,
+        next_connect: 0.0,
     }
 }
 
@@ -135,6 +141,21 @@ fn poll(s: &mut State, t: f64, _tx: &mut Tx) -> bool {
         if avds != s.avds {
             s.avds = avds;
             changed = true;
+        }
+    }
+    // Keep a screen connection to the selected instance while it runs.
+    let want = s.current().filter(|r| r.running.is_some()).map(|r| r.dir.clone());
+    let have = s.screen.as_ref().filter(|sc| sc.alive()).map(|sc| sc.dir.clone());
+    if want != have {
+        if s.screen.take().is_some() {
+            changed = true;
+        }
+        if let Some(dir) = want
+            && t >= s.next_connect
+        {
+            s.next_connect = t + 1.0;
+            s.screen = screen::Screen::connect(&dir, 720);
+            changed |= s.screen.is_some();
         }
     }
     if let Some(row) = s.current() {

@@ -6,6 +6,7 @@
 
 mod args;
 mod console;
+mod display_server;
 mod instance;
 mod png;
 mod provision;
@@ -179,6 +180,8 @@ fn real_main() -> Result<ExitCode> {
         },
     )?;
     let _advert = console::Advertisement::write(&avd.name, &avd.dir, inst.console_port);
+    // Live display + input for the desktop app (<avd>/emu-rs/display.sock).
+    let _display = inst.display.clone().and_then(|d| display_server::start(&avd.dir, d, inst.inputs.clone(), stop.clone()));
     // On stdout: launchers watch for the first line and the `emulator-<port>` serial.
     println!("emu: {} on emulator-{} (adb port {})", avd.name, inst.console_port, inst.console_port + 1);
     loop {

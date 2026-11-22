@@ -1,7 +1,7 @@
 use crate::backend::AvdRow;
 use crate::{Action, State};
 use rune::tok::{self, Theme, radius, type_};
-use rune::{Color, Cx, El, ScrollSpec, col, el, row, text};
+use rune::{Color, Cx, Drag, El, Phase, ScrollSpec, SurfaceFit, Tx, col, el, row, text};
 
 const GREEN: Color = Color { r: 0.20, g: 0.78, b: 0.45, a: 1.0 };
 const GREY: Color = Color { r: 0.55, g: 0.57, b: 0.60, a: 1.0 };
@@ -92,6 +92,66 @@ fn avd_list(s: &State, t: Theme) -> El {
         .child(list.scroll(ScrollSpec { stick_bottom: false }).shrink().min_h(0.0))
 }
 
+fn key_button(key: &str, label: &str, code: &'static str, t: Theme) -> El {
+    row()
+        .key(key)
+        .role("button")
+        .label(label.to_string())
+        .focusable(true)
+        .h(28.0)
+        .px(12.0)
+        .center_y()
+        .radius(radius::SM)
+        .fill(t.control_off)
+        .on_press(move |s: &mut State| {
+            if let Some(sc) = &s.screen {
+                sc.send(&format!("key {code}"));
+            }
+        })
+        .child(text(label.to_string()).font(type_::LABEL).color(t.text))
+}
+
+/// The live device screen with its hardware keys.
+fn screen_pane(s: &State, t: Theme) -> Option<El> {
+    let sc = s.screen.as_ref()?;
+    let (gw, gh) = sc.guest_size();
+    let ratio = if gw > 0 && gh > 0 { gw as f32 / gh as f32 } else { 9.0 / 20.0 };
+    let screen = el()
+        .key("device-screen")
+        .role("image")
+        .label("Device screen".to_string())
+        .h_full()
+        .aspect_fit(ratio)
+        .radius(radius::SM)
+        .fill(Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 })
+        .pixels_fit(&sc.pixels, SurfaceFit::Fit)
+        .on_drag(|s: &mut State, d: &mut Drag, _tx: &mut Tx| {
+            let phase = match d.phase {
+                Phase::Down => "down",
+                Phase::Move => "move",
+                Phase::Up => "up",
+            };
+            if let Some(sc) = &s.screen {
+                sc.touch(d.x, d.y, d.w, d.h, phase);
+            }
+        });
+    Some(
+        col()
+            .key("screen-pane")
+            .h_full()
+            .min_h(0.0)
+            .gap(8.0)
+            .child(screen.grow(1.0).min_h(0.0))
+            .child(
+                row()
+                    .gap(6.0)
+                    .child(key_button("key-back", "Back", "BACK", t))
+                    .child(key_button("key-home", "Home", "HOME", t))
+                    .child(key_button("key-power", "Power", "POWER", t)),
+            ),
+    )
+}
+
 fn detail(s: &State, t: Theme) -> El {
     let Some(r) = s.current() else {
         return col().grow(1.0).child(text("Select a device").font(type_::BODY).color(t.text_secondary));
@@ -127,6 +187,18 @@ fn detail(s: &State, t: Theme) -> El {
                 .child(control),
         )
         .child(text(format!("{state_line} · {facts}")).font(type_::MONO_CAPTION).color(t.text_secondary))
-        .child(text("CONSOLE").font(type_::SECTION).color(t.text_secondary))
-        .child(log.scroll(ScrollSpec { stick_bottom: true }).shrink().min_h(0.0))
+        .child({
+            let console = col()
+                .grow(1.0)
+                .h_full()
+                .min_h(0.0)
+                .gap(10.0)
+                .child(text("CONSOLE").font(type_::SECTION).color(t.text_secondary))
+                .child(log.scroll(ScrollSpec { stick_bottom: true }).shrink().min_h(0.0));
+            let mut body = row().w_full().grow(1.0).min_h(0.0).gap(14.0);
+            if let Some(pane) = screen_pane(s, t) {
+                body = body.child(pane);
+            }
+            body.child(console)
+        })
 }
